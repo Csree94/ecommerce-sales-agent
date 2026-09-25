@@ -1,0 +1,28 @@
+# =====================================================================
+# ecommerce-sales-agent — backend runtime dependencies
+# Pins are minimum versions; a lock file can be added later (pip-tools/uv).
+# =====================================================================
+
+# --- Web framework ---------------------------------------------------
+fastapi>=0.115
+uvicorn[standard]>=0.32
+
+# --- Configuration ---------------------------------------------------
+pydantic>=2.9
+pydantic-settings>=2.6
+python-dotenv>=1.0
+
+# --- Database (PostgreSQL / Neon) ------------------------------------
+# SQLAlchemy 2.x — sync engine; Neon-pooler friendly (short-lived connections)
+SQLAlchemy>=2.0.36
+psycopg[binary]>=3.2          # psycopg3 driver for SQLAlchemy
+alembic>=1.14                 # migrations (setup comes with the schema phase)
+
+# --- Cache (Redis) ---------------------------------------------------
+redis>=5.2
+
+# --- Observability ---------------------------------------------------
+structlog>=24.4
+
+# --- HTTP client (used by future integrations/clients) ---------------
+httpx>=0.28
