@@ -16,7 +16,7 @@ python-dotenv>=1.0
 # SQLAlchemy 2.x — sync engine; Neon-pooler friendly (short-lived connections)
 SQLAlchemy>=2.0.36
 psycopg[binary]>=3.2          # psycopg3 driver for SQLAlchemy
-alembic>=1.14                 # migrations (setup comes with the schema phase)
+alembic>=1.14                 # schema migrations (app/models + migrations/)
 
 # --- Cache (Redis) ---------------------------------------------------
 redis>=5.2

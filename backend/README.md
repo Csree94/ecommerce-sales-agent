@@ -24,7 +24,9 @@ backend/
 ├── app/
 │   ├── config/          # Settings (pydantic-settings), env enum, LLM provider settings
 │   ├── core/            # Cross-cutting: structured logging
-│   ├── db/              # Engine/session factory tuned for Neon (no tables yet)
+│   ├── db/              # Engine/session factory tuned for Neon
+│   ├── models/          # SQLAlchemy 2.x models: Customer, Conversation, Message, AgentRun
+│   ├── migrations/      # Alembic environment + versioned migrations
 │   ├── integrations/    # External clients: Redis factory (Shopify/Telegram later)
 │   ├── api/
 │   │   ├── deps.py      # Request-scoped dependencies (DB session, Redis, settings)
@@ -85,8 +87,29 @@ full annotated list; `app/config/settings.py` is the source of truth).
 Database notes (Neon, per audit §L): use the **pooled** Neon connection string
 in deployment; `DB_USE_NULL_POOL=true` (default) avoids holding connections
 open across event loops/cold starts; `pool_pre_ping` handles serverless
-resets. No application tables exist yet — Alembic migrations arrive with the
-schema phase.
+resets.
+
+## Database schema & migrations
+
+Models live in `app/models/` (application data only — Inventra stays the
+source of truth for products/inventory; LangGraph checkpoints are owned by
+`langgraph-checkpoint-postgres` and are never part of this metadata):
+
+| Table | Purpose |
+| --- | --- |
+| `customers` | Customer identity, unique `telegram_user_id` |
+| `conversations` | Chat thread per customer; `last_message_at` drives dashboard ordering |
+| `messages` | Turn history; roles `customer/agent/system/admin`; Telegram update-id idempotency |
+| `agent_runs` | Per-turn observability (model, fallback, tool calls, latency) |
+
+```bash
+# Apply migrations (uses DATABASE_URL from the environment)
+alembic upgrade head
+# Generate SQL without a DB (offline check)
+alembic upgrade head --sql
+# Create a new revision after model changes (needs a reachable DB)
+alembic revision --autogenerate -m "change"
+```
 
 ## Deliberately not in this phase
 
@@ -94,4 +117,4 @@ schema phase.
 - LLM gateway (Gemini primary / Nemotron fallback)
 - Shopify / Telegram integrations
 - Admin API and dashboard
-- Alembic migrations / domain tables
+- LangGraph checkpoints (created/owned by `langgraph-checkpoint-postgres`)
