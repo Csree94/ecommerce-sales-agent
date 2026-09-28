@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.config.settings import Settings
 from app.db.session import Database
+from app.integrations.inventra import InventraClient
 
 
 def get_settings_dep(request: Request) -> Settings:
@@ -45,3 +46,22 @@ def get_db_session(
 def get_redis(request: Request) -> Redis:
     """Return the shared Redis client attached at startup (not used yet)."""
     return request.app.state.redis
+
+
+def get_inventra_client(request: Request) -> InventraClient:
+    """Return the shared read-only Inventra client attached at startup.
+
+    Raises 503 when the integration is not configured (no INVENTRA_BASE_URL),
+    so misconfiguration surfaces as a clear HTTP error instead of an AttributeError
+    deep inside a handler. Agent tools (later phase) receive this via typed
+    parameters; this dependency exists for route-level plumbing.
+    """
+    client: InventraClient | None = getattr(request.app.state, "inventra_client", None)
+    if client is None:
+        from fastapi import HTTPException, status
+
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Inventra integration is not configured",
+        )
+    return client
