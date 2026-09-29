@@ -172,7 +172,174 @@ def test_classification_is_deterministic() -> None:
     assert a == b
 
 
+@pytest.mark.parametrize(
+    ("message", "expected_intent"),
+    [
+        ("do you have samsung phones?", "product_search"),
+        ("do you sell laptops", "product_search"),
+        ("i want headphones", "product_search"),
+        ("i need a dell laptop", "product_search"),
+    ],
+)
+def test_classification_recognizes_shopping_phrases(
+    message: str, expected_intent: str
+) -> None:
+    """Common shopping phrasings reach product_search (regression: were unknown)."""
+    assert classify_intent(AgentState(customer_message=message)) == {"intent": expected_intent}
+
+
 # --- gather_context node -----------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_term"),
+    [
+        # Natural-language shopping phrasings → bare product term.
+        ("Show me Samsung Galaxy S26", "samsung galaxy s26"),
+        ("Do you have Samsung phones?", "samsung phones"),
+        ("I'm looking for a Dell laptop", "dell laptop"),
+        ("Show me some headphones", "headphones"),
+        ("Can you recommend a laptop?", "laptop"),
+        # Exact product name passes through (lowercased, unchanged tokens).
+        ("Samsung Galaxy S26", "samsung galaxy s26"),
+        ("Trail Shoes", "trail shoes"),
+        # SKUs / tokens containing digits are never dropped.
+        ("TS-001", "ts-001"),
+        ("Is the TS-001 in stock?", "ts-001"),
+        ("Is Samsung Galaxy S26 in stock?", "samsung galaxy s26"),
+        # Plain single word stays as-is.
+        ("shoes", "shoes"),
+        # Punctuation-only and empty input → None (caller falls back to raw).
+        ("???", None),
+        ("", None),
+        ("   ", None),
+    ],
+)
+def test_extract_search_term(message: str, expected_term: str | None) -> None:
+    from app.agents.gather import _extract_search_term
+
+    assert _extract_search_term(message) == expected_term
+
+
+def test_product_search_uses_extracted_term(client: MagicMock) -> None:
+    """The node searches for the extracted term, not the whole sentence."""
+    client.list_products.return_value = make_async(ProductListResponse.model_validate(PRODUCT_LIST))
+
+    run(
+        gather_context(
+            AgentState(customer_message="Show me Samsung Galaxy S26", intent="product_search"),
+            client,
+        )
+    )
+
+    assert client.list_products.call_args.kwargs["search"] == "samsung galaxy s26"
+
+
+def test_product_search_falls_back_to_raw_message_on_zero_results(
+    client: MagicMock,
+) -> None:
+    """Bounded retry ladder on zero results: raw message first."""
+    empty = ProductListResponse.model_validate(
+        {"products": [], "total": 0, "page": 1, "per_page": 5, "pages": 0}
+    )
+    hit = ProductListResponse.model_validate(PRODUCT_LIST)
+    client.list_products.side_effect = [make_async(empty), make_async(hit)]
+
+    result = run(
+        gather_context(
+            AgentState(customer_message="Show me the xyzzy-model-9", intent="product_search"),
+            client,
+        )
+    )
+
+    assert client.list_products.call_count == 2
+    assert client.list_products.call_args_list[0].kwargs["search"] == "xyzzy-model-9"
+    assert client.list_products.call_args_list[1].kwargs["search"] == "Show me the xyzzy-model-9"
+    assert result["tool_results"]["products"]["total"] == 1
+
+
+def test_product_search_token_fallback_when_multiword_term_finds_nothing(
+    client: MagicMock,
+) -> None:
+    """Multi-word term 0-hit → raw message → longest significant token (bounded)."""
+    empty = ProductListResponse.model_validate(
+        {"products": [], "total": 0, "page": 1, "per_page": 5, "pages": 0}
+    )
+    hit = ProductListResponse.model_validate(PRODUCT_LIST)
+    client.list_products.side_effect = [make_async(empty), make_async(empty), make_async(hit)]
+
+    result = run(
+        gather_context(
+            AgentState(customer_message="Show me Sony headphones", intent="product_search"),
+            client,
+        )
+    )
+
+    searches = [c.kwargs["search"] for c in client.list_products.call_args_list]
+    assert searches == ["sony headphones", "Show me Sony headphones", "headphones"]
+    assert client.list_products.call_count == 3
+    assert result["tool_results"]["products"]["total"] == 1
+
+
+def test_product_search_fallback_ladder_is_bounded(client: MagicMock) -> None:
+    """All-zero results → exactly 1 + len(ladder) calls, never unbounded."""
+    empty = ProductListResponse.model_validate(
+        {"products": [], "total": 0, "page": 1, "per_page": 5, "pages": 0}
+    )
+    # A fresh coroutine per call — the fallback loop awaits several.
+    client.list_products.side_effect = lambda *a, **kw: make_async(empty)
+
+    run(
+        gather_context(
+            AgentState(
+                customer_message="Show me Samsung Galaxy S26", intent="product_search"
+            ),
+            client,
+        )
+    )
+
+    # 1 initial + raw + at most 2 token fallbacks = hard cap of 4 calls.
+    assert client.list_products.call_count <= 4
+
+
+def test_zero_result_fallback_terms_helper() -> None:
+    from app.agents.gather import _zero_result_fallback_terms
+
+    # Raw message first, then up to two longest significant tokens.
+    assert _zero_result_fallback_terms("Show me Sony headphones", "sony headphones") == [
+        "Show me Sony headphones",
+        "headphones",
+        "sony",
+    ]
+    # Term equals raw → no duplicated raw entry; single-token term stays.
+    assert _zero_result_fallback_terms("shoes", "shoes") == ["shoes"]
+    # Nothing product-bearing and term is None → only the raw message.
+    assert _zero_result_fallback_terms("hi", None) == ["hi"]
+
+
+def test_product_search_single_call_when_first_search_hits(client: MagicMock) -> None:
+    """A clean search performs exactly one Inventra call — no speculative retries."""
+    client.list_products.return_value = make_async(ProductListResponse.model_validate(PRODUCT_LIST))
+
+    run(gather_context(AgentState(customer_message="shoes", intent="product_search"), client))
+
+    assert client.list_products.call_count == 1
+
+
+def test_inventory_check_uses_extracted_term(client: MagicMock) -> None:
+    """Inventory search strips framing the same way (regression: raw sentence)."""
+    client.list_inventory.return_value = make_async([InventoryItem.model_validate(INVENTORY_ITEM)])
+
+    run(
+        gather_context(
+            AgentState(
+                customer_message="Is the TS-001 in stock?", intent="inventory_check"
+            ),
+            client,
+        )
+    )
+
+    assert client.list_inventory.call_args.kwargs["search"] == "ts-001"
 
 
 def test_product_search_routes_to_search_products(client: MagicMock) -> None:

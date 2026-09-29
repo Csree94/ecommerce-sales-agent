@@ -61,6 +61,97 @@ def _extract_id(message: str) -> int | None:
     return int(digits[-1]) if digits else None
 
 
+# Phrases that frame a shopping request but never appear in product names.
+# Longest first so multi-word fillers are stripped before their fragments.
+_SEARCH_FILLERS = (
+    "i'm looking for",
+    "im looking for",
+    "do you have",
+    "do you sell",
+    "show me",
+    "search for",
+    "find me",
+    "looking for",
+    "recommend",
+    "suggest",
+    "i want",
+    "i need",
+    "please",
+    "can you",
+    "could you",
+    "find",
+    "search",
+)
+
+# Bare function words that carry no product meaning once fillers are gone.
+# Tokens containing digits (SKUs like "TS-001", models like "s26") are never dropped.
+_SEARCH_STOPWORDS = frozenset(
+    {
+        "a", "an", "the", "some", "any", "for", "me", "my", "your",
+        "is", "are", "in", "on", "do", "does", "you", "i", "we",
+        "have", "has", "was", "were", "there", "that", "this", "it",
+        "of", "to", "with", "and", "or", "about", "tell", "what",
+        "how", "much", "many", "available", "availability", "stock",
+    }
+)
+
+_PUNCTUATION = ".,!?;:'\"()[]{}—–-"
+
+
+def _extract_search_term(message: str) -> str | None:
+    """Deterministic shopping-phrase extraction (temporary — LLM replaces later).
+
+    Strips known framing phrases and bare function words from a customer
+    message, keeping the product-bearing remainder. Digits-containing tokens
+    (SKUs/model numbers) are preserved. Returns ``None`` when nothing product-
+    bearing remains (caller falls back to the raw message or a bare listing).
+    """
+    cleaned = message.lower()
+    for filler in _SEARCH_FILLERS:
+        cleaned = cleaned.replace(filler, " ")
+    cleaned = cleaned.strip(_PUNCTUATION + " ")
+    tokens = [
+        tok.strip(_PUNCTUATION)
+        for tok in cleaned.split()
+        if tok.strip(_PUNCTUATION)
+    ]
+    # Keep tokens carrying digits (SKUs/model numbers) unconditionally;
+    # drop bare function words; keep every other product-bearing token.
+    kept = [
+        tok
+        for tok in tokens
+        if any(ch.isdigit() for ch in tok) or tok not in _SEARCH_STOPWORDS
+    ]
+    term = " ".join(kept)
+    return term or None
+
+
+def _zero_result_fallback_terms(message: str, term: str | None) -> list[str]:
+    """Ordered, bounded fallback terms for a zero-result first attempt.
+
+    1. the original (unmodified) customer message — covers deliberately
+       exact queries the extractor may have mangled;
+    2. up to two significant individual tokens (longest first) — Inventra
+       matches the whole ``search`` value as one substring, so a multi-word
+       term like ``"samsung phones"`` finds nothing even though the product
+       exists and ``"samsung"`` alone would match it.
+
+    Hard-capped at three entries: never an unbounded retry loop.
+    """
+    raw = message.strip()
+    ladder: list[str] = []
+    if raw and raw.lower() != (term or ""):
+        ladder.append(raw)
+    if term:
+        tokens = sorted(
+            (tok for tok in term.split() if len(tok) > 2),
+            key=len,
+            reverse=True,
+        )[:2]
+        ladder.extend(tok for tok in tokens if tok.lower() not in [x.lower() for x in ladder])
+    return ladder
+
+
 async def gather_context(state: AgentState, client: Any) -> dict[str, Any]:
     """Node: call the tool matching the classified intent.
 
@@ -72,10 +163,26 @@ async def gather_context(state: AgentState, client: Any) -> dict[str, Any]:
 
     try:
         if intent == "product_search":
+            raw = message.strip()
+            term = _extract_search_term(message)
+            first = term or raw or None
             result = await search_products(
                 client,
-                ProductSearchParams(search=message.strip() or None, per_page=5),
+                ProductSearchParams(search=first, per_page=5),
             )
+            # Bounded zero-result ladder: raw message, then individual
+            # significant tokens ( Inventra matches the whole phrase as one
+            # substring ). Never unbounded — see _zero_result_fallback_terms.
+            if result.total == 0 and first is not None:
+                for fallback in _zero_result_fallback_terms(message, term):
+                    if fallback == first:
+                        continue
+                    result = await search_products(
+                        client,
+                        ProductSearchParams(search=fallback, per_page=5),
+                    )
+                    if result.total > 0:
+                        break
             return {"tool_results": {"products": result.model_dump(mode="json")}}
         if intent == "product_details":
             product_id = _extract_id(message)
@@ -90,10 +197,23 @@ async def gather_context(state: AgentState, client: Any) -> dict[str, Any]:
             categories = await list_categories(client)
             return {"tool_results": {"categories": [c.model_dump(mode="json") for c in categories]}}
         if intent == "inventory_check":
+            raw = message.strip()
+            term = _extract_search_term(message)
+            first = term or raw or None
             items = await check_inventory(
                 client,
-                InventorySearchParams(search=message.strip() or None),
+                InventorySearchParams(search=first),
             )
+            if not items and first is not None:
+                for fallback in _zero_result_fallback_terms(message, term):
+                    if fallback == first:
+                        continue
+                    items = await check_inventory(
+                        client,
+                        InventorySearchParams(search=fallback),
+                    )
+                    if items:
+                        break
             return {"tool_results": {"inventory": [i.model_dump(mode="json") for i in items]}}
         if intent == "inventory_movements":
             product_id = _extract_id(message)

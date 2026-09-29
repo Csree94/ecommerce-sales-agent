@@ -130,6 +130,7 @@ async def process_inbound_message(
         session = database.session()
         try:
             customer = resolve_customer(session, inbound)
+            session.flush()  # assign customer.id before it is used as a FK
             conversation = resolve_conversation(session, customer)
             session.flush()  # assign PKs before we hand the id to the graph
             if is_duplicate_update(session, conversation, inbound.update_id):

@@ -17,7 +17,21 @@ _INTENT_RULES: list[tuple[IntentName, tuple[str, ...]]] = [
     ("inventory_check", ("in stock", "in-stock", "stock", "availability", "available")),
     ("product_details", ("details", "detail", "more about", "tell me about", "info about")),
     ("category_browse", ("categories", "category", "browse", "catalog sections")),
-    ("product_search", ("search", "looking for", "find", "show me", "recommend", "suggest")),
+    (
+        "product_search",
+        (
+            "search",
+            "looking for",
+            "find",
+            "show me",
+            "recommend",
+            "suggest",
+            "do you have",
+            "do you sell",
+            "i want",
+            "i need",
+        ),
+    ),
 ]
 
 _UNKNOWN_INTENT = "unknown"

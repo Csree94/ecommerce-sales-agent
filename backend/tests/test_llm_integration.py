@@ -374,3 +374,71 @@ def test_gateway_satisfies_provider_protocol_shape() -> None:
     assert callable(gateway.generate)
     assert callable(gateway.aclose)
     assert LLMProvider is not None  # protocol imported for typing seams
+
+
+# --- Fallback settings are optional (regression: required key crashed          #
+# --- build_default_gateway on fresh environments with no fallback key)        #
+
+
+def test_fallback_settings_default_to_empty_key() -> None:
+    """FALLBACK_LLM_API_KEY absent → FallbackLlmSettings initializes, key empty."""
+    settings = FallbackLlmSettings(_env_file=None)
+
+    assert settings.api_key.get_secret_value() == ""
+    assert settings.model == "nvidia/llama-3.1-nemotron-70b-instruct"
+
+
+def test_build_default_gateway_primary_only_when_fallback_key_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Gemini key configured + no fallback key → primary-only Gemini gateway."""
+    from app.config.llm import get_fallback_llm_settings, get_gemini_settings
+    from app.integrations import llm as llm_pkg
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-only-key")
+    monkeypatch.delenv("FALLBACK_LLM_API_KEY", raising=False)
+    # Isolate from a developer-local backend/.env (may contain a real fallback key).
+    monkeypatch.setattr("app.config.llm.GeminiSettings", lambda: GeminiSettings(_env_file=None))
+    monkeypatch.setattr(
+        "app.config.llm.FallbackLlmSettings", lambda: FallbackLlmSettings(_env_file=None)
+    )
+    get_gemini_settings.cache_clear()
+    get_fallback_llm_settings.cache_clear()
+    llm_pkg.get_llm_gateway.cache_clear()
+    try:
+        gateway = llm_pkg.build_default_gateway()
+    finally:
+        get_gemini_settings.cache_clear()
+        get_fallback_llm_settings.cache_clear()
+        llm_pkg.get_llm_gateway.cache_clear()
+
+    assert type(gateway._primary).__name__ == "GeminiProvider"
+    assert gateway._fallback is None
+
+
+def test_build_default_gateway_includes_fallback_when_key_provided(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both keys configured → Gemini primary + Nemotron fallback preserved."""
+    from app.config.llm import get_fallback_llm_settings, get_gemini_settings
+    from app.integrations import llm as llm_pkg
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-only-key")
+    monkeypatch.setenv("FALLBACK_LLM_API_KEY", "nvapi-test-fallback-key")
+    # Isolate from a developer-local backend/.env (may lack FALLBACK_LLM_API_KEY).
+    monkeypatch.setattr("app.config.llm.GeminiSettings", lambda: GeminiSettings(_env_file=None))
+    monkeypatch.setattr(
+        "app.config.llm.FallbackLlmSettings", lambda: FallbackLlmSettings(_env_file=None)
+    )
+    get_gemini_settings.cache_clear()
+    get_fallback_llm_settings.cache_clear()
+    llm_pkg.get_llm_gateway.cache_clear()
+    try:
+        gateway = llm_pkg.build_default_gateway()
+    finally:
+        get_gemini_settings.cache_clear()
+        get_fallback_llm_settings.cache_clear()
+        llm_pkg.get_llm_gateway.cache_clear()
+
+    assert type(gateway._primary).__name__ == "GeminiProvider"
+    assert type(gateway._fallback).__name__ == "NemotronProvider"
