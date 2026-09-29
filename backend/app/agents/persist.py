@@ -112,11 +112,20 @@ def persist_turn(state: AgentState, database: Database | None) -> dict[str, Any]
             error=None,
             latency_ms=_latency_ms(state, now),
         )
+        # Telegram transport ids (audit §H idempotency) travel through state
+        # metadata when the turn came from the webhook; None for other channels.
+        telegram_update_id = state.metadata.get("telegram_update_id")
+        telegram_message_id = state.metadata.get("telegram_message_id")
+        external_created_at = state.metadata.get("external_created_at")
+
         customer_message = Message(
             conversation_id=conversation_id,
             role=MessageRole.CUSTOMER,
             content_text=state.customer_message,
             correlation_id=correlation_id,
+            telegram_update_id=telegram_update_id,
+            telegram_message_id=telegram_message_id,
+            external_created_at=external_created_at,
         )
         agent_message = Message(
             conversation_id=conversation_id,

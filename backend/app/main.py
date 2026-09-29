@@ -19,6 +19,7 @@ from app.core.logging import configure_logging, get_logger
 from app.db.session import Database
 from app.integrations.inventra import InventraClient
 from app.integrations.redis_client import close_redis_pool, get_redis_client
+from app.integrations.telegram.client import TelegramClient
 
 
 @asynccontextmanager
@@ -37,6 +38,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.inventra_client = (
         InventraClient(inventra_settings) if inventra_settings.base_url else None
     )
+    # Optional integration: only constructed when TELEGRAM_BOT_TOKEN is set.
+    # The webhook route answers 503 when absent (clear misconfiguration signal).
+    telegram_token = settings.telegram_bot_token.get_secret_value()
+    app.state.telegram_client = TelegramClient(telegram_token) if telegram_token else None
+    # Strong references to in-flight turn tasks (asyncio GCs unreferenced tasks).
+    app.state.telegram_background_tasks = set()
     logger.info("application_startup_complete")
 
     yield
@@ -46,6 +53,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     inventra_client: InventraClient | None = getattr(app.state, "inventra_client", None)
     if inventra_client is not None:
         await inventra_client.aclose()
+    telegram_client: TelegramClient | None = getattr(app.state, "telegram_client", None)
+    if telegram_client is not None:
+        await telegram_client.aclose()
     await close_redis_pool()
     logger.info("application_shutdown_complete")
 

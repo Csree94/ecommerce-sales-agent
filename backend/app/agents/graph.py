@@ -88,19 +88,25 @@ async def run_turn(
     conversation_id: str | None = None,
     database: Any = None,
     gateway: LLMGateway | None = None,
+    metadata_extra: dict[str, Any] | None = None,
 ) -> AgentState:
     """Execute one agent turn end-to-end and return the final state.
 
     ``database`` is forwarded to the graph; when omitted, the turn runs
     without persistence (``metadata.persisted`` stays false). ``gateway`` is
     forwarded likewise; when omitted, the default config-built gateway is
-    used (``build_graph`` resolves it lazily).
+    used (``build_graph`` resolves it lazily). ``metadata_extra`` is merged
+    into state metadata (channel-specific ids the persist node may stamp on
+    messages — never secrets).
     """
     graph = build_graph(client, database, gateway)
+    metadata = {"turn_started_at": datetime.now(UTC).timestamp()}
+    if metadata_extra:
+        metadata.update(metadata_extra)
     initial = AgentState(
         customer_message=customer_message,
         conversation_id=conversation_id,
-        metadata={"turn_started_at": datetime.now(UTC).timestamp()},
+        metadata=metadata,
     )
     result = await graph.ainvoke(
         initial, config={"configurable": {"thread_id": conversation_id or "adhoc"}}
