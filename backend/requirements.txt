@@ -21,6 +21,11 @@ alembic>=1.14                 # schema migrations (app/models + migrations/)
 # --- Cache (Redis) ---------------------------------------------------
 redis>=5.2
 
+# --- Agent orchestration (LangGraph) ---------------------------------
+# Graph foundation only: StateGraph wiring + deterministic nodes.
+# Checkpointing (langgraph-checkpoint-postgres) is intentionally deferred.
+langgraph>=1.0
+
 # --- Observability ---------------------------------------------------
 structlog>=24.4
 
