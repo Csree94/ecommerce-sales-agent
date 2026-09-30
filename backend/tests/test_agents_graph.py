@@ -105,6 +105,20 @@ MOVEMENT_LIST = {
 }
 PRODUCT_LIST = {"products": [PRODUCT], "total": 1, "page": 1, "per_page": 20, "pages": 1}
 
+# A second product for name→id resolution tests (T6).
+SAMSUNG_PRODUCT = {
+    "id": 12,
+    "name": "Samsung Galaxy S26",
+    "sku": "SGS26-256",
+    "description": "Flagship smartphone, 256 GB",
+    "category_id": 2,
+    "category_name": "Phones",
+    "price": 1099.0,
+    "is_active": True,
+    "created_at": "2026-03-01T09:00:00Z",
+    "updated_at": "2026-03-01T09:00:00Z",
+}
+
 
 @pytest.fixture()
 def client() -> MagicMock:
@@ -186,6 +200,351 @@ def test_classification_recognizes_shopping_phrases(
 ) -> None:
     """Common shopping phrasings reach product_search (regression: were unknown)."""
     assert classify_intent(AgentState(customer_message=message)) == {"intent": expected_intent}
+
+
+# --- classify_intent: deterministic multilingual fallback (T9) -----------------
+
+
+def test_spanish_product_availability_reaches_product_search(client: MagicMock) -> None:
+    """T9: '¿Tienes auriculares Sony?' routes to the EXISTING product_search intent."""
+    assert classify_intent(
+        AgentState(customer_message="¿Tienes auriculares Sony?")
+    ) == {"intent": "product_search"}
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_intent"),
+    [
+        ("¿Tienen laptops HP?", "product_search"),
+        ("Necesito un teléfono", "product_search"),
+        ("Busco zapatillas Nike", "product_search"),
+        ("Quiero auriculares Sony", "product_search"),
+        ("¿Hay stock de la TS-001?", "inventory_check"),
+        ("¿Qué categorías hay?", "category_browse"),
+        ("Dime más sobre Samsung Galaxy S26", "product_details"),
+    ],
+)
+def test_multilingual_fallback_maps_to_existing_intents(
+    message: str, expected_intent: str
+) -> None:
+    """Spanish patterns reuse existing intents — no new intent is created."""
+    assert classify_intent(AgentState(customer_message=message)) == {"intent": expected_intent}
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Show me Sony headphones",
+        "Do you have Samsung phones?",
+        "I need a phone.",
+        "I'm looking for hiking shoes",
+        "tell me about product 7",
+        "what categories do you have",
+        "is the trail shoes in stock",
+    ],
+)
+def test_english_classification_unchanged_by_multilingual_fallback(message: str) -> None:
+    """Regression: English messages classify exactly as before the fallback."""
+    expected = {
+        "Show me Sony headphones": "product_search",
+        "Do you have Samsung phones?": "product_search",
+        "I need a phone.": "product_search",
+        "I'm looking for hiking shoes": "product_search",
+        "tell me about product 7": "product_details",
+        "what categories do you have": "category_browse",
+        "is the trail shoes in stock": "inventory_check",
+    }
+    assert classify_intent(AgentState(customer_message=message)) == {"intent": expected[message]}
+
+
+def test_greeting_stays_unknown_with_multilingual_fallback() -> None:
+    """Greetings must not be swallowed by the fallback table."""
+    assert classify_intent(AgentState(customer_message="hi")) == {"intent": "unknown"}
+    assert classify_intent(AgentState(customer_message="hola")) == {"intent": "unknown"}
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "¿Cómo llego a la tienda?",
+        "mi gato es negro",
+        "random unrelated text",
+    ],
+)
+def test_unrelated_requests_stay_unknown_with_multilingual_fallback(message: str) -> None:
+    """Unknown/unrelated requests remain unknown — fallback is narrow, not greedy."""
+    assert classify_intent(AgentState(customer_message=message)) == {"intent": "unknown"}
+
+
+def test_classification_multilingual_fallback_is_deterministic() -> None:
+    """The Spanish path is pure keyword matching: no LLM, no randomness."""
+    a = classify_intent(AgentState(customer_message="¿Tienes auriculares Sony?"))
+    b = classify_intent(AgentState(customer_message="¿Tienes auriculares Sony?"))
+    assert a == b == {"intent": "product_search"}
+
+
+def test_classification_uses_no_llm_for_multilingual_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """T9 guard: ordinary classification never calls an LLM.
+
+    Any construction of the LLM gateway (or a gateway.generate call) inside the
+    classify path would fail this test — classify_intent is pure/deterministic.
+    """
+    import app.integrations.llm as llm_pkg
+
+    def _boom(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("classification must not build or use an LLM gateway")
+
+    # build_graph resolves the gateway lazily via ``from app.integrations.llm
+    # import get_llm_gateway`` — patch the package attribute (the real seam).
+    monkeypatch.setattr(llm_pkg, "get_llm_gateway", _boom)
+    from app.agents.classify import classify_intent as classify_direct
+
+    assert classify_direct(AgentState(customer_message="¿Tienes auriculares Sony?")) == {
+        "intent": "product_search"
+    }
+    assert classify_direct(AgentState(customer_message="hi")) == {"intent": "unknown"}
+
+
+# --- gather_context: Spanish search-term extraction (T9) -----------------------
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_term"),
+    [
+        # Opening ¿ and trailing ? are stripped; framing verbs removed.
+        ("¿Tienes auriculares Sony?", "auriculares sony"),
+        ("¿Tienen laptops HP?", "laptops hp"),
+        ("Necesito un teléfono", "teléfono"),
+        ("Busco zapatillas Nike", "zapatillas nike"),
+        ("Quiero auriculares Sony", "auriculares sony"),
+        ("Muéstrame las zapatillas", "zapatillas"),
+    ],
+)
+def test_extract_search_term_spanish(message: str, expected_term: str) -> None:
+    """Spanish queries strip framing through the SAME extraction pipeline."""
+    from app.agents.gather import _extract_search_term
+
+    assert _extract_search_term(message) == expected_term
+
+
+# --- gather_context: alias/category fallback (T7) ------------------------------
+
+# Real-catalog-shaped laptop products (mirrors the live Inventra catalog:
+# "laptop" occurs in their descriptions, never as a bare name token).
+LAPTOPS = {
+    "products": [
+        dict(PRODUCT, id=31, name="Dell XPS 15", sku="DXPS-15", category_name="Laptops"),
+        dict(PRODUCT, id=32, name="HP Pavilion 15", sku="HPP-15", category_name="Laptops"),
+        dict(PRODUCT, id=33, name="Lenovo IdeaPad Slim 5", sku="LIP-5", category_name="Laptops"),
+    ],
+    "total": 3,
+    "page": 1,
+    "per_page": 5,
+    "pages": 1,
+}
+EMPTY_LIST = {"products": [], "total": 0, "page": 1, "per_page": 5, "pages": 0}
+LAPTOP_CATEGORY = dict(CATEGORY, id=2, name="Laptops")
+PHONE_CATEGORY = dict(CATEGORY, id=1, name="Mobile phones")
+HEADPHONES_CATEGORY = dict(CATEGORY, id=4, name="Headphones")
+
+
+def test_laptop_query_alias_finds_real_products(client: MagicMock) -> None:
+    """T7: 'What laptops do you have?' → canonicalized 'laptop' hits immediately.
+
+    The plural term is swapped for its literal singular alias BEFORE the first
+    search (the plural can match unrelated products mentioning "laptops" in
+    their description). Same search_products tool, one call, no invented data.
+    """
+    hit = ProductListResponse.model_validate(LAPTOPS)
+    # Exactly one call expected: the canonicalized term hits on the first try
+    # (StopAsyncIteration on any extra call keeps this strict).
+    client.list_products.side_effect = [make_async(hit)]
+
+    result = run(
+        gather_context(
+            AgentState(customer_message="What laptops do you have?", intent="product_search"),
+            client,
+        )
+    )
+
+    searches = [c.kwargs["search"] for c in client.list_products.call_args_list]
+    assert searches == ["laptop"]
+    client.list_categories.assert_not_called()  # literal alias needs no category lookup
+    assert result["tool_results"]["products"]["total"] == 3
+
+
+def test_category_alias_resolves_live_category_id(client: MagicMock) -> None:
+    """Generic category term → category_id resolved live via the existing tool.
+
+    'phones' has no literal alias, so its category alias (Mobile phones) is
+    resolved through GET /api/categories and used as a category_id filter.
+    """
+    empty = ProductListResponse.model_validate(EMPTY_LIST)
+    hit = ProductListResponse.model_validate(PRODUCT_LIST)
+    client.list_products.side_effect = [make_async(empty), make_async(empty), make_async(hit)]
+    client.list_categories.return_value = make_async([Category.model_validate(PHONE_CATEGORY)])
+
+    result = run(
+        gather_context(
+            AgentState(customer_message="Do you have phones?", intent="product_search"),
+            client,
+        )
+    )
+
+    # Final attempt is a category_id filter — no search term invented.
+    assert client.list_products.call_args.kwargs.get("category_id") == 1
+    assert client.list_products.call_args.kwargs.get("search") is None
+    client.list_categories.assert_called_once()
+    assert result["tool_results"]["products"]["total"] == 1
+
+
+def test_alias_ladder_is_bounded_and_fails_honestly(client: MagicMock) -> None:
+    """Alias adds at most its fixed entries; all-zero stays an honest empty."""
+    empty = ProductListResponse.model_validate(EMPTY_LIST)
+    client.list_products.side_effect = lambda *a, **kw: make_async(empty)
+    # Live catalog HAS a Laptops category → the category alias is resolved and
+    # tried once more after the literal 'laptop' alias failed (bounded).
+    client.list_categories.return_value = make_async([Category.model_validate(LAPTOP_CATEGORY)])
+
+    result = run(
+        gather_context(
+            AgentState(customer_message="What laptops do you have?", intent="product_search"),
+            client,
+        )
+    )
+
+    # Canonical term + raw message + one resolved category filter — hard-capped.
+    assert client.list_products.call_count == 3
+    assert client.list_products.call_args.kwargs.get("category_id") == 2
+    assert result["tool_results"]["products"]["total"] == 0
+    assert "tool_errors" not in result
+
+
+def test_category_alias_failure_degrades_without_crashing(client: MagicMock) -> None:
+    """Category resolution failure → skip alias, honest zero result (no raise)."""
+    empty = ProductListResponse.model_validate(EMPTY_LIST)
+    client.list_products.side_effect = lambda *a, **kw: make_async(empty)
+    client.list_categories.side_effect = make_tool_error("upstream_error")
+
+    result = run(
+        gather_context(
+            AgentState(customer_message="Do you have phones?", intent="product_search"),
+            client,
+        )
+    )
+
+    # term + raw ladder only; the category alias was skipped cleanly.
+    assert client.list_products.call_count == 2
+    assert result["tool_results"]["products"]["total"] == 0
+    assert "tool_errors" not in result
+
+
+def test_english_multiword_search_unaffected_by_alias(client: MagicMock) -> None:
+    """'Do you have Samsung phones?' resolves via the existing token ladder."""
+    empty = ProductListResponse.model_validate(EMPTY_LIST)
+    hit = ProductListResponse.model_validate(PRODUCT_LIST)
+    client.list_products.side_effect = [make_async(empty), make_async(empty), make_async(hit)]
+
+    result = run(
+        gather_context(
+            AgentState(customer_message="Do you have Samsung phones?", intent="product_search"),
+            client,
+        )
+    )
+
+    searches = [c.kwargs["search"] for c in client.list_products.call_args_list]
+    assert searches == ["samsung phones", "Do you have Samsung phones?", "samsung"]
+    client.list_categories.assert_not_called()  # ladder hit before any alias
+    assert result["tool_results"]["products"]["total"] == 1
+
+
+def test_spanish_auriculares_alias_reaches_headphones_category(client: MagicMock) -> None:
+    """T9 enhancement: 'auriculares' maps onto the SAME alias/category path."""
+    empty = ProductListResponse.model_validate(EMPTY_LIST)
+    sony_hit = ProductListResponse.model_validate(
+        {"products": [dict(PRODUCT, id=21, name="Sony WH-1000XM6", sku="SONY-XM6")],
+         "total": 1, "page": 1, "per_page": 5, "pages": 1}
+    )
+    client.list_products.side_effect = [
+        make_async(empty),  # 'auriculares sony'
+        make_async(empty),  # raw message
+        make_async(empty),  # 'auriculares'
+        make_async(empty),  # 'sony'
+        make_async(sony_hit),  # category_id=Headphones
+    ]
+    client.list_categories.return_value = make_async(
+        [Category.model_validate(HEADPHONES_CATEGORY)]
+    )
+
+    result = run(
+        gather_context(
+            AgentState(customer_message="¿Tienes auriculares Sony?", intent="product_search"),
+            client,
+        )
+    )
+
+    assert client.list_categories.call_count == 1
+    assert client.list_products.call_args.kwargs.get("category_id") == 4
+    assert result["tool_results"]["products"]["total"] == 1
+
+
+def test_graph_laptop_query_end_to_end_mentions_real_products(client: MagicMock) -> None:
+    """T7, full graph: 'What laptops do you have?' → real catalog product names."""
+    hit = ProductListResponse.model_validate(LAPTOPS)
+    # Canonicalized 'laptop' search hits on the first Inventra call.
+    client.list_products.side_effect = [make_async(hit)]
+
+    graph = build_graph(client, None, failing_gateway())
+    final = run(
+        graph.ainvoke(
+            AgentState(customer_message="What laptops do you have?"),
+            config={"configurable": {"thread_id": "conv-t7"}},
+        )
+    )
+
+    assert final["intent"] == "product_search"
+    assert final["tool_results"]["products"]["total"] == 3
+    assert not final["tool_errors"]
+    # Deterministic safety net names real catalog products — nothing invented.
+    assert "Dell XPS 15" in final["draft_response"]
+    assert "HP Pavilion 15" in final["draft_response"]
+    assert "Lenovo IdeaPad Slim 5" in final["draft_response"]
+
+
+def test_spanish_query_end_to_end_reaches_existing_product_search(client: MagicMock) -> None:
+    """T9, full graph: '¿Tienes auriculares Sony?' → product_search tool path.
+
+    Asserts the EXISTING product-search capability is reused (list_products
+    called with the extracted term) — not a new intent or new pipeline.
+    """
+    sony_list = ProductListResponse.model_validate(
+        {
+            "products": [dict(PRODUCT, id=21, name="Sony WH-1000XM6", sku="SONY-XM6")],
+            "total": 1,
+            "page": 1,
+            "per_page": 5,
+            "pages": 1,
+        }
+    )
+    client.list_products.return_value = make_async(sony_list)
+
+    graph = build_graph(client, None, failing_gateway())
+    final = run(
+        graph.ainvoke(
+            AgentState(customer_message="¿Tienes auriculares Sony?"),
+            config={"configurable": {"thread_id": "conv-t9"}},
+        )
+    )
+
+    assert final["intent"] == "product_search"
+    client.list_products.assert_called_once()
+    assert client.list_products.call_args.kwargs["search"] == "auriculares sony"
+    assert final["tool_results"]["products"]["total"] == 1
+    assert not final["tool_errors"]
+    # Deterministic safety net lists the found product → turn completes.
+    assert "Sony WH-1000XM6" in final["draft_response"]
 
 
 # --- gather_context node -----------------------------------------------------
@@ -353,6 +712,7 @@ def test_product_search_routes_to_search_products(client: MagicMock) -> None:
 
 
 def test_product_details_routes_to_get_product_details(client: MagicMock) -> None:
+    """Numeric-ID details flow is preserved: direct lookup, search never called."""
     client.get_product.return_value = make_async(Product.model_validate(PRODUCT))
     result = run(
         gather_context(
@@ -361,19 +721,106 @@ def test_product_details_routes_to_get_product_details(client: MagicMock) -> Non
     )
 
     client.get_product.assert_called_once_with(7)
+    client.list_products.assert_not_called()
     assert result["tool_results"]["product"]["id"] == 7
 
 
-def test_product_details_without_id_is_invalid_input_failure(client: MagicMock) -> None:
+def test_product_details_resolves_name_via_existing_search(client: MagicMock) -> None:
+    """T6: a natural-language product name resolves through product search."""
+    samsung_list = ProductListResponse.model_validate(
+        {
+            "products": [SAMSUNG_PRODUCT],
+            "total": 1,
+            "page": 1,
+            "per_page": 5,
+            "pages": 1,
+        }
+    )
+    client.list_products.return_value = make_async(samsung_list)
+    client.get_product.return_value = make_async(Product.model_validate(SAMSUNG_PRODUCT))
+
     result = run(
         gather_context(
-            AgentState(customer_message="tell me more", intent="product_details"), client
+            AgentState(
+                customer_message="Tell me about Samsung Galaxy S26", intent="product_details"
+            ),
+            client,
+        )
+    )
+
+    client.list_products.assert_called_once()
+    assert client.list_products.call_args.kwargs["search"] == "samsung galaxy s26"
+    client.get_product.assert_called_once_with(12)
+    assert "tool_errors" not in result
+    assert result["tool_results"]["product"]["id"] == 12
+    assert result["tool_results"]["product"]["name"] == "Samsung Galaxy S26"
+
+
+def test_product_details_name_resolution_prefers_exact_match(client: MagicMock) -> None:
+    """Several hits → the exact case-insensitive name match wins (no LLM guess)."""
+    ultra = dict(SAMSUNG_PRODUCT, id=5, name="Samsung Galaxy S26 Ultra")
+    exact = dict(SAMSUNG_PRODUCT, id=9, name="Samsung Galaxy S26")
+    both = ProductListResponse.model_validate(
+        {"products": [ultra, exact], "total": 2, "page": 1, "per_page": 5, "pages": 1}
+    )
+    client.list_products.return_value = make_async(both)
+    client.get_product.return_value = make_async(Product.model_validate(exact))
+
+    result = run(
+        gather_context(
+            AgentState(
+                customer_message="Tell me about Samsung Galaxy S26",
+                intent="product_details",
+            ),
+            client,
+        )
+    )
+
+    client.get_product.assert_called_once_with(9)
+    assert result["tool_results"]["product"]["id"] == 9
+
+
+def test_product_details_unknown_name_is_not_found_failure(client: MagicMock) -> None:
+    """No search hit at all → honest not_found failure, details never called."""
+    empty = ProductListResponse.model_validate(
+        {"products": [], "total": 0, "page": 1, "per_page": 5, "pages": 0}
+    )
+    client.list_products.side_effect = lambda *a, **kw: make_async(empty)
+
+    result = run(
+        gather_context(
+            AgentState(
+                customer_message="Tell me about Unobtainium X999",
+                intent="product_details",
+            ),
+            client,
         )
     )
 
     client.get_product.assert_not_called()
     failure = result["tool_errors"]["gather_context"]
-    assert failure.code == "invalid_input"
+    assert failure.code == "not_found"
+    assert failure.tool == "gather_context"
+
+
+def test_product_details_name_resolution_ladder_is_bounded(client: MagicMock) -> None:
+    """Name resolution reuses the bounded search ladder — never unbounded."""
+    empty = ProductListResponse.model_validate(
+        {"products": [], "total": 0, "page": 1, "per_page": 5, "pages": 0}
+    )
+    client.list_products.side_effect = lambda *a, **kw: make_async(empty)
+
+    run(
+        gather_context(
+            AgentState(
+                customer_message="Tell me about Samsung Galaxy S26", intent="product_details"
+            ),
+            client,
+        )
+    )
+
+    # Same hard cap as product_search: initial + raw + at most 2 token fallbacks.
+    assert client.list_products.call_count <= 4
 
 
 def test_category_browse_routes_to_list_categories(client: MagicMock) -> None:
@@ -558,6 +1005,34 @@ def test_graph_constructs_and_reaches_final_response(client: MagicMock) -> None:
 
     assert final["intent"] == "product_search"
     assert "Trail Shoes" in final["draft_response"]
+
+
+def test_graph_t6_name_based_product_details_end_to_end(client: MagicMock) -> None:
+    """T6, full graph: 'Tell me about Samsung Galaxy S26' → product details."""
+    samsung_list = ProductListResponse.model_validate(
+        {"products": [SAMSUNG_PRODUCT], "total": 1, "page": 1, "per_page": 5, "pages": 1}
+    )
+    client.list_products.return_value = make_async(samsung_list)
+    client.get_product.return_value = make_async(Product.model_validate(SAMSUNG_PRODUCT))
+    gateway = FakeGateway(
+        response=GenerationResponse(
+            text="The Samsung Galaxy S26 is our flagship phone at 1099.00.",
+            model_used="models/gemini-2.5-flash",
+        )
+    )
+
+    graph = build_graph(client, None, gateway)
+    final = run(
+        graph.ainvoke(
+            AgentState(customer_message="Tell me about Samsung Galaxy S26"),
+            config={"configurable": {"thread_id": "conv-t6"}},
+        )
+    )
+
+    assert final["intent"] == "product_details"
+    assert final["tool_results"]["product"]["id"] == 12
+    assert not final["tool_errors"]
+    assert "Samsung Galaxy S26" in final["draft_response"]
 
 
 def test_graph_survives_tool_failure_and_still_replies(client: MagicMock) -> None:
