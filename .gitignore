@@ -44,6 +44,7 @@ dist/
 dist-ssr/
 .vite/
 *.local
+frontend/tsconfig.tsbuildinfo
 
 # Logs
 logs/

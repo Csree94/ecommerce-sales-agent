@@ -70,6 +70,22 @@ class Settings(BaseSettings):
         default=SecretStr(""), validation_alias="TELEGRAM_WEBHOOK_SECRET"
     )
 
+    # --- Admin dashboard (single env-configured admin; JWT auth) -----------
+    # No AdminUser table by design (Project 1): one admin, configured via env.
+    admin_username: str = Field(default="", validation_alias="ADMIN_USERNAME")
+    # PBKDF2-SHA256 hash (never the plaintext password) — see app/api/admin_deps.py.
+    admin_password_hash: SecretStr = Field(
+        default=SecretStr(""), validation_alias="ADMIN_PASSWORD_HASH"
+    )
+    # HS256 signing secret for admin access tokens.
+    jwt_secret_key: SecretStr = Field(default=SecretStr(""), validation_alias="JWT_SECRET_KEY")
+    admin_jwt_expire_minutes: int = Field(
+        default=480, validation_alias="ADMIN_JWT_EXPIRE_MINUTES"
+    )
+    # Comma-separated browser origins allowed to call the admin APIs (dev). Empty
+    # disables CORS entirely (production can serve the dashboard from the API origin).
+    cors_allowed_origins: str = Field(default="", validation_alias="CORS_ALLOWED_ORIGINS")
+
     # --- LLM (provider clients NOT implemented in this phase) --------------
     gemini_api_key: SecretStr = Field(default=SecretStr(""), validation_alias="GEMINI_API_KEY")
     gemini_model: str = Field(default="models/gemini-2.5-flash", validation_alias="GEMINI_MODEL")
@@ -82,6 +98,15 @@ class Settings(BaseSettings):
     fallback_llm_model: str = Field(
         default="nvidia/llama-3.1-nemotron-70b-instruct", validation_alias="FALLBACK_LLM_MODEL"
     )
+
+    @property
+    def admin_auth_configured(self) -> bool:
+        """True when every admin-auth variable is set (login/token-issuance ready)."""
+        return bool(
+            self.admin_username
+            and self.admin_password_hash.get_secret_value()
+            and self.jwt_secret_key.get_secret_value()
+        )
 
     @computed_field  # type: ignore[prop-decorator]
     @property

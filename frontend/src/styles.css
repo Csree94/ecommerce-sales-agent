@@ -1,0 +1,298 @@
+/* Minimal, readable admin dashboard styling — intentionally not a design system. */
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: #f2f4f7;
+  color: #1c2430;
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+}
+
+/* --- Login --- */
+.login-wrap {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+}
+
+.login-card {
+  background: #fff;
+  border: 1px solid #dde3ea;
+  border-radius: 10px;
+  padding: 2rem;
+  width: min(360px, 90vw);
+  display: grid;
+  gap: 1rem;
+}
+
+.login-card h1 {
+  font-size: 1.25rem;
+  margin: 0;
+}
+
+.login-card label {
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  color: #5b6675;
+}
+
+.login-card input {
+  padding: 0.5rem 0.65rem;
+  border: 1px solid #c9d2dd;
+  border-radius: 6px;
+  font: inherit;
+}
+
+.error {
+  color: #b3261e;
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+/* --- Shell --- */
+.app-shell {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  height: 100vh;
+}
+
+.app-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 1rem;
+  background: #14213d;
+  color: #fff;
+}
+
+.app-bar h1 {
+  font-size: 1rem;
+  margin: 0;
+}
+
+.app-bar .who {
+  font-size: 0.8rem;
+  opacity: 0.75;
+  margin-right: auto;
+}
+
+.app-bar button {
+  background: transparent;
+  border: 1px solid #3d4c6b;
+  color: #dbe3f4;
+  border-radius: 6px;
+  padding: 0.25rem 0.75rem;
+}
+
+.two-pane {
+  display: grid;
+  grid-template-columns: minmax(280px, 380px) 1fr;
+  min-height: 0;
+}
+
+/* --- List pane --- */
+.list-pane {
+  border-right: 1px solid #dde3ea;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.pane-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid #edf0f4;
+}
+
+.pane-header h2 {
+  font-size: 1rem;
+  margin: 0;
+}
+
+.pane-header button {
+  border: 1px solid #c9d2dd;
+  background: #fff;
+  border-radius: 6px;
+  padding: 0.2rem 0.6rem;
+}
+
+.conversation-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.conversation-row {
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-bottom: 1px solid #edf0f4;
+  padding: 0.65rem 1rem;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.conversation-row:hover {
+  background: #f6f8fb;
+}
+
+.conversation-row.selected {
+  background: #e8f0fe;
+}
+
+.row-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.row-top time {
+  color: #8a93a2;
+  font-size: 0.75rem;
+}
+
+.row-preview {
+  color: #5b6675;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.badge {
+  justify-self: start;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-radius: 999px;
+  padding: 0.1rem 0.5rem;
+  background: #e5e9ef;
+  color: #47536b;
+}
+
+.badge.open {
+  background: #e3f5e9;
+  color: #1d7a3d;
+}
+
+.badge.needs_human {
+  background: #fdeccd;
+  color: #935f10;
+}
+
+.badge.closed {
+  background: #ececec;
+  color: #6b7280;
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 1rem;
+  border-top: 1px solid #edf0f4;
+  font-size: 0.85rem;
+}
+
+.pager button {
+  border: 1px solid #c9d2dd;
+  background: #fff;
+  border-radius: 6px;
+  padding: 0.2rem 0.6rem;
+}
+
+.pager button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* --- Thread pane --- */
+.thread-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.bubble-row {
+  display: flex;
+}
+
+.bubble-row.customer {
+  justify-content: flex-start;
+}
+
+.bubble-row.agent,
+.bubble-row.admin,
+.bubble-row.system {
+  justify-content: flex-end;
+}
+
+.bubble {
+  max-width: min(560px, 78%);
+  border-radius: 12px;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.9rem;
+  line-height: 1.35;
+}
+
+.bubble p {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.bubble time {
+  display: block;
+  font-size: 0.68rem;
+  opacity: 0.6;
+  margin-top: 0.2rem;
+  text-align: right;
+}
+
+.bubble.customer {
+  background: #ffffff;
+  border: 1px solid #e2e6ec;
+}
+
+.bubble.agent {
+  background: #d3ecd7;
+}
+
+.bubble.system,
+.bubble.admin {
+  background: #e8e8ee;
+}
+
+.state {
+  padding: 1.25rem;
+  color: #5b6675;
+  font-size: 0.9rem;
+}
+
+.state.error {
+  color: #b3261e;
+}

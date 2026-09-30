@@ -10,6 +10,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
 from app.api.routes import api_router
@@ -76,6 +77,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
 
     app.state.settings = settings
+
+    # CORS for the admin dashboard dev server (opt-in via CORS_ALLOWED_ORIGINS;
+    # empty = no CORS headers at all). Production should serve the dashboard
+    # from the API origin or set an explicit allowlist.
+    allowed_origins = [
+        origin.strip() for origin in settings.cors_allowed_origins.split(",") if origin.strip()
+    ]
+    if allowed_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=allowed_origins,
+            allow_credentials=True,
+            allow_methods=["GET", "POST"],
+            allow_headers=["Authorization", "Content-Type"],
+        )
+
     app.include_router(api_router, prefix=settings.api_v1_prefix)
     return app
 

@@ -12,6 +12,9 @@ pydantic>=2.9
 pydantic-settings>=2.6
 python-dotenv>=1.0
 
+# --- Admin authentication (JWT) ---------------------------------------
+PyJWT>=2.9                    # admin access tokens (HS256, env-based secret)
+
 # --- Database (PostgreSQL / Neon) ------------------------------------
 # SQLAlchemy 2.x — sync engine; Neon-pooler friendly (short-lived connections)
 SQLAlchemy>=2.0.36
