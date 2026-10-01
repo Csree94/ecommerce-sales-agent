@@ -7,9 +7,10 @@ side; external integrations (Shopify) follow in later phases.
 
 from fastapi import APIRouter
 
-from app.api.routes import admin, health, telegram
+from app.api.routes import admin, health, inventra_admin, telegram
 
 api_router = APIRouter()
 api_router.include_router(health.router)
 api_router.include_router(telegram.router)
 api_router.include_router(admin.router)
+api_router.include_router(inventra_admin.router)

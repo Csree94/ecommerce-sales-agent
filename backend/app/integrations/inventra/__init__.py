@@ -34,6 +34,7 @@ from app.integrations.inventra.errors import (
 from app.integrations.inventra.schemas import (
     Category,
     InventoryItem,
+    InventraDashboardStats,
     MovementType,
     Product,
     ProductListResponse,
@@ -46,6 +47,7 @@ __all__ = [
     "Category",
     "InventoryItem",
     "InventraAuthProvider",
+    "InventraDashboardStats",
     "InventraAuthError",
     "InventraClient",
     "InventraConfigError",

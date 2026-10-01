@@ -49,6 +49,7 @@ from app.integrations.inventra.errors import (
 from app.integrations.inventra.schemas import (
     Category,
     InventoryItem,
+    InventraDashboardStats,
     MovementType,
     Product,
     ProductListResponse,
@@ -188,6 +189,15 @@ class InventraClient:
         path = "/api/inventory/movements"
         data = await self._request_json("GET", path, params=params)
         return self._parse(StockMovementListResponse, data, path)
+
+    # ------------------------------------------------------------------
+    # Dashboard (read-only stats endpoint, upstream-cached 120 s)
+    # ------------------------------------------------------------------
+
+    async def get_dashboard_stats(self) -> InventraDashboardStats:
+        """``GET /api/dashboard`` — aggregate stats for the admin overview."""
+        data = await self._request_json("GET", "/api/dashboard")
+        return self._parse(InventraDashboardStats, data, "/api/dashboard")
 
     # ------------------------------------------------------------------
     # Request core

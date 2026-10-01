@@ -114,3 +114,50 @@ class StockMovementListResponse(BaseModel):
     total: int
     page: int
     per_page: int
+
+
+class DashboardMovement(BaseModel):
+    """One recent-movement row inside the dashboard stats payload.
+
+    Service-built upstream (no response_model there): ``product_name`` and
+    "username" fall back to "Unknown" when relations are missing.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    id: int
+    product_name: str
+    movement_type: str
+    quantity: int
+    username: str | None = None
+    notes: str | None = None
+    created_at: datetime | None = None
+
+
+class LowStockProduct(BaseModel):
+    """One low-stock alert row inside the dashboard stats payload."""
+
+    model_config = ConfigDict(frozen=True)
+
+    product_id: int
+    product_name: str
+    product_sku: str
+    quantity: int
+    threshold: int
+
+
+class InventraDashboardStats(BaseModel):
+    """Payload of ``GET /api/dashboard`` (upstream-cached 120 s, written by
+    Inventra's ``dashboard_service.get_dashboard_stats``)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    total_products: int
+    active_products: int
+    total_stock: int
+    low_stock_count: int
+    out_of_stock_count: int
+    total_stock_in: int
+    total_stock_out: int
+    recent_movements: list[DashboardMovement]
+    low_stock_products: list[LowStockProduct]

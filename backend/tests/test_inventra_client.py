@@ -409,6 +409,7 @@ def test_client_exposes_only_verified_read_methods() -> None:
         "get_category",
         "list_inventory",
         "list_inventory_movements",
+        "get_dashboard_stats",
     }
 
 

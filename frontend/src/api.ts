@@ -6,7 +6,15 @@
  * All backend calls go through the Vite dev proxy (/api → http://127.0.0.1:8000).
  */
 
-import type { ConversationPage, MessagesPage } from "./types";
+import type {
+  Category,
+  ConversationPage,
+  InventraDashboardStats,
+  InventoryItem,
+  MessagesPage,
+  ProductListResponse,
+  StockMovementListResponse,
+} from "./types";
 
 const API_BASE = "/api/v1";
 const TOKEN_KEY = "admin_access_token";
@@ -75,4 +83,77 @@ export function fetchMessages(conversationId: string): Promise<MessagesPage> {
   return request<MessagesPage>(
     `/admin/conversations/${conversationId}/messages?limit=100&offset=0`,
   );
+}
+
+/** Query for the read-only Inventra product proxy (empty/null values are omitted). */
+export interface AdminProductQuery {
+  page: number;
+  search: string | null;
+  is_active: boolean | null;
+  stock_status: string | null;
+}
+
+function buildQueryString(
+  entries: Array<[string, string | number | boolean | null]>,
+): string {
+  const params = new URLSearchParams();
+  for (const [key, value] of entries) {
+    if (value !== null && value !== "") {
+      params.set(key, String(value));
+    }
+  }
+  const qs = params.toString();
+  return qs ? `?${qs}` : "";
+}
+
+/** Products via the Project 1 backend proxy (Inventra token stays server-side). */
+export function fetchAdminProducts(
+  query: AdminProductQuery,
+): Promise<ProductListResponse> {
+  return request<ProductListResponse>(
+    `/admin/products${buildQueryString([
+      ["page", query.page],
+      ["search", query.search],
+      ["is_active", query.is_active],
+      ["stock_status", query.stock_status],
+    ])}`,
+  );
+}
+
+/** Inventory levels via the Project 1 backend proxy (read-only). */
+export function fetchAdminInventory(query: {
+  search: string | null;
+  stock_status: string | null;
+  low_stock_only: boolean;
+}): Promise<InventoryItem[]> {
+  return request<InventoryItem[]>(
+    `/admin/inventory${buildQueryString([
+      ["search", query.search],
+      ["stock_status", query.stock_status],
+      ["low_stock_only", query.low_stock_only ? "true" : null],
+    ])}`,
+  );
+}
+
+/** Stock-movement history via the Project 1 backend proxy (read-only). */
+export function fetchAdminMovements(query: {
+  page: number;
+  movement_type: string | null;
+}): Promise<StockMovementListResponse> {
+  return request<StockMovementListResponse>(
+    `/admin/inventory/movements${buildQueryString([
+      ["page", query.page],
+      ["movement_type", query.movement_type],
+    ])}`,
+  );
+}
+
+/** Categories via the Project 1 backend proxy (read-only). */
+export function fetchAdminCategories(): Promise<Category[]> {
+  return request<Category[]>("/admin/categories");
+}
+
+/** Inventra aggregate stats via the Project 1 backend proxy (read-only). */
+export function fetchAdminDashboardStats(): Promise<InventraDashboardStats> {
+  return request<InventraDashboardStats>("/admin/dashboard/stats");
 }
