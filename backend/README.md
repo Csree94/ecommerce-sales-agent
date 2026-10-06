@@ -1,10 +1,13 @@
 # Backend — ecommerce-sales-agent
 
-FastAPI backend for the AI sales agent. This is the **foundation phase**:
-configuration, database connection, cache groundwork, structured logging and
-health endpoints. Agent orchestration (LangGraph), LLM gateway, Shopify and
-Telegram integrations are intentionally **not implemented yet** — see
-`docs/architecture-audit.md` (§P, implementation order) for the roadmap.
+FastAPI backend for the AI sales agent. **Project 1 scope is fully implemented**:
+configuration, database persistence, structured logging, health endpoints, the
+Telegram webhook + LangGraph agent (classify → gather → purchase → compose →
+persist) with Gemini primary / Nemotron fallback LLMs, the Inventra integration
+(reads + confirmed-purchase stock-out), a Redis read-through cache with
+stock-out invalidation, and the JWT-protected admin API backing the dashboard.
+Shopify remains **Project 2** (config placeholders only) — see
+`docs/architecture-audit.md` for the architecture and this file for layout/runbook.
 
 ## Stack
 
@@ -13,7 +16,7 @@ Telegram integrations are intentionally **not implemented yet** — see
 | Framework | FastAPI + Uvicorn |
 | Config | pydantic-settings (env vars + optional `.env`) |
 | Database | PostgreSQL (Neon) via SQLAlchemy 2.x (sync) + psycopg3 |
-| Cache | Redis (async client, groundwork only) |
+| Cache | Redis (read-through cache for Inventra reads; degrades safely when absent) |
 | Logging | structlog (JSON in production, console in dev) |
 | Tooling | pytest, ruff, mypy |
 
@@ -27,10 +30,12 @@ backend/
 │   ├── db/              # Engine/session factory tuned for Neon
 │   ├── models/          # SQLAlchemy 2.x models: Customer, Conversation, Message, AgentRun
 │   ├── migrations/      # Alembic environment + versioned migrations
-│   ├── integrations/    # External clients: Redis factory (Shopify/Telegram later)
+│   ├── integrations/    # External clients: Inventra (reads + stock-out), Redis + cache, LLM gateway, Telegram
+│   ├── agents/          # LangGraph sales agent (classify/gather/purchase/compose/persist)
+│   ├── tools/           # Typed Inventra tool wrappers (cache-aside aware)
 │   ├── api/
 │   │   ├── deps.py      # Request-scoped dependencies (DB session, Redis, settings)
-│   │   └── routes/      # Routers: health (more added per phase)
+│   │   └── routes/      # Routers: health, telegram webhook, admin, admin Inventra views
 │   └── main.py          # App factory + ASGI entrypoint (lifespan-managed infra)
 ├── tests/               # Smoke tests (pytest)
 ├── requirements.txt     # Runtime dependencies
@@ -71,8 +76,8 @@ uvicorn app.main:app --reload      # docs at http://localhost:8000/docs
 ## Checks
 
 ```bash
-pytest                 # smoke tests
-ruff check .           # lint
+pytest                 # full suite (377 tests at Project 1 completion)
+ruff check .           # lint (4 documented, intentionally-deferred findings in scripts/)
 ruff format --check .  # formatting
 mypy app               # static types
 ```
@@ -113,8 +118,5 @@ alembic revision --autogenerate -m "change"
 
 ## Deliberately not in this phase
 
-- LangGraph agent + tools (`app/agents/`, `app/tools/` — reserved packages)
-- LLM gateway (Gemini primary / Nemotron fallback)
-- Shopify / Telegram integrations
-- Admin API and dashboard
-- LangGraph checkpoints (created/owned by `langgraph-checkpoint-postgres`)
+- Shopify integration (Project 2; config placeholders only — no code, no calls)
+- LangGraph Postgres checkpoints (owned by `langgraph-checkpoint-postgres`)

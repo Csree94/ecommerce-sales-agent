@@ -1,7 +1,8 @@
 # Admin Dashboard (frontend)
 
-Minimal React + Vite + TypeScript dashboard for viewing customer
-conversations (WhatsApp-style) from the Sales Agent's admin APIs.
+Minimal React + Vite + TypeScript dashboard for the Sales Agent's admin APIs:
+customer conversations plus integrated read-only Inventra views (products,
+inventory, stock movements, categories, overview stats).
 
 ## Layout
 
@@ -9,6 +10,9 @@ conversations (WhatsApp-style) from the Sales Agent's admin APIs.
   status badge, most recent activity first, paginated).
 - **Right pane**: chronological message thread of the selected conversation
   (customer bubbles left, agent bubbles right).
+- **Inventra pages**: Overview (dashboard stats), Products, Inventory,
+  Stock Movements, Categories — served by the backend's admin Inventra API
+  (no direct Inventra connection from the browser; no Inventra source changes).
 
 ## Run (development)
 

@@ -1,15 +1,20 @@
 # Architecture & Integration Audit — ecommerce-sales-agent
 
-> **Scope note.** This is an *analysis document*, not an implementation. No code, dependencies,
-> LangGraph setup, Shopify/Telegram/admin-dashboard implementations, or DB migrations are included.
-> Nothing here has been committed.
+> **Scope note (updated October 2026).** This document is the *pre-implementation analysis*
+> for Project 1; the architecture below was subsequently implemented and completed:
+> Telegram sales agent (FastAPI + LangGraph), confirmed-purchase flow with a single
+> Inventra stock-out, Redis read-through cache with stock-out invalidation, and a
+> JWT-protected admin dashboard. For the as-built system see `README.md` and
+> `backend/README.md`. Shopify remains **Project 2** and was deliberately not
+> implemented. The sections below are preserved as the original design rationale.
 >
-> **Verification status.** The Inventra repository was **not accessible** from this workspace
-> (the only reference found in this repo is a one-line mention in `README.md`). Everything stated
-> about Inventra is therefore explicitly labeled **[Assumption]** and must be validated against
-> the actual Inventra codebase before implementation. Sections whose statements are grounded in
-> the local repo or in verified external research are marked accordingly. This document
-> deliberately does **not** invent existing Inventra functionality.
+> **Verification status (historical).** When this analysis was written, the Inventra
+> repository was **not accessible** from this workspace and every Inventra statement
+> was labeled **[Assumption]**. All Inventra contracts were subsequently verified
+> against the real Inventra backend during implementation (endpoints, filters,
+> response shapes, movement types, auth behavior); the integration lives in
+> `backend/app/integrations/inventra/` and the embedded `inventra/` source tree was
+> never modified.
 
 ---
 
