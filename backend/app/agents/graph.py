@@ -45,15 +45,17 @@ def build_graph(
     client: Any,
     database: Any = None,
     gateway: LLMGateway | None = None,
+    cache: Any = None,
 ) -> CompiledStateGraph:
     """Compile the sales-agent graph with injected dependencies.
 
     ``client`` is the InventraClient; ``database`` the optional Database
     holder (persist is skipped cleanly when None — e.g. ad-hoc usage);
     ``gateway`` the optional LLMGateway (a config-built default is used when
-    omitted — inject a fake in tests to avoid real provider calls). All are
-    injected via closures so nodes never construct infrastructure and tests
-    can mock at these exact seams.
+    omitted — inject a fake in tests to avoid real provider calls);
+    ``cache`` the optional milestone-4 read-through cache (``None`` = direct
+    reads, the historical behavior). All are injected via closures so nodes
+    never construct infrastructure and tests can mock at these exact seams.
     """
 
     if gateway is None:
@@ -62,10 +64,10 @@ def build_graph(
         gateway = get_llm_gateway()
 
     async def gather(state: AgentState) -> dict[str, Any]:
-        return await gather_context(state, client)
+        return await gather_context(state, client, cache)
 
     async def purchase_node(state: AgentState) -> dict[str, Any]:
-        return await purchase(state, client, database)
+        return await purchase(state, client, database, cache)
 
     async def compose(state: AgentState) -> dict[str, Any]:
         return await compose_reply(state, gateway)
@@ -100,17 +102,19 @@ async def run_turn(
     database: Any = None,
     gateway: LLMGateway | None = None,
     metadata_extra: dict[str, Any] | None = None,
+    cache: Any = None,
 ) -> AgentState:
     """Execute one agent turn end-to-end and return the final state.
 
     ``database`` is forwarded to the graph; when omitted, the turn runs
     without persistence (``metadata.persisted`` stays false). ``gateway`` is
     forwarded likewise; when omitted, the default config-built gateway is
-    used (``build_graph`` resolves it lazily). ``metadata_extra`` is merged
+    used (``build_graph`` resolves it lazily). ``cache`` is forwarded
+    likewise (``None`` = direct uncached reads). ``metadata_extra`` is merged
     into state metadata (channel-specific ids the persist node may stamp on
     messages — never secrets).
     """
-    graph = build_graph(client, database, gateway)
+    graph = build_graph(client, database, gateway, cache)
     metadata = {"turn_started_at": datetime.now(UTC).timestamp()}
     if metadata_extra:
         metadata.update(metadata_extra)

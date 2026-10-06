@@ -109,6 +109,7 @@ async def process_inbound_message(
     client: Any,
     telegram: TelegramClient,
     database: Database,
+    cache: Any = None,
 ) -> None:
     """Full pipeline for one inbound message; never raises.
 
@@ -154,6 +155,7 @@ async def process_inbound_message(
             customer_message=inbound.text,
             conversation_id=str(conversation.id),
             database=database,
+            cache=cache,
             metadata_extra={
                 "telegram_update_id": inbound.update_id,
                 "telegram_message_id": inbound.message_id,

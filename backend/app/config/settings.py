@@ -51,6 +51,14 @@ class Settings(BaseSettings):
     redis_socket_timeout_seconds: float = Field(
         default=5.0, validation_alias="REDIS_SOCKET_TIMEOUT"
     )
+    # Cache-aside TTLs (milestone 4): product/inventory ~30-120s per teacher
+    # guidance; negative results get a short TTL so a temporary "not found"
+    # never becomes a long-lived stale state; categories change rarely.
+    cache_ttl_products_seconds: int = Field(default=60, validation_alias="CACHE_TTL_PRODUCTS")
+    cache_ttl_negative_seconds: int = Field(default=8, validation_alias="CACHE_TTL_NEGATIVE")
+    cache_ttl_categories_seconds: int = Field(
+        default=900, validation_alias="CACHE_TTL_CATEGORIES"
+    )
 
     # --- Shopify (integration NOT implemented in this phase) ---------------
     shopify_shop_url: str = Field(default="", validation_alias="SHOPIFY_SHOP_URL")

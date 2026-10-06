@@ -18,6 +18,7 @@ from app.config.inventra import get_inventra_settings
 from app.config.settings import Settings, get_settings
 from app.core.logging import configure_logging, get_logger
 from app.db.session import Database
+from app.integrations.cache import InventraCache
 from app.integrations.inventra import InventraClient
 from app.integrations.redis_client import close_redis_pool, get_redis_client
 from app.integrations.telegram.client import TelegramClient
@@ -32,7 +33,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     logger.info("application_startup_begin", environment=settings.app_env.value)
     app.state.database = Database.from_settings()
-    app.state.redis = get_redis_client()
+    redis_client = get_redis_client()
+    app.state.redis = redis_client
+    # Milestone 4: read-through cache over the shared Redis client. Redis is
+    # lazily connected and the cache degrades to direct reads when absent —
+    # constructing it here never requires a running Redis.
+    app.state.inventra_cache = InventraCache(redis_client)
     # Optional integration: only constructed when INVENTRA_BASE_URL is set.
     # Built once here so tools/routes share one httpx pool (later phases).
     # app/config/inventra.py is the single source of truth for Inventra config.

@@ -5,7 +5,8 @@ graph → tools → InventraClient → HTTP. The graph itself contains no HTTP, 
 URLs, no auth, and no database code — it only calls the typed tools from
 ``app.tools.inventra`` and records structured outcomes in state. Tool failures
 (ToolError) become structured state (ToolFailure), never exceptions and never
-silent empty results.
+silent empty results. An optional read-through cache (milestone 4) travels
+the same path — the node never talks to Redis itself.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 from app.agents.state import AgentState, ToolErrorCode, ToolFailure
+from app.integrations.cache import InventraCache
 from app.integrations.inventra.schemas import Product, ProductListResponse
 from app.tools.errors import ToolError, ToolNotFoundError
 from app.tools.inventra import (
@@ -213,7 +215,9 @@ def _zero_result_fallback_terms(message: str, term: str | None) -> list[str]:
     return ladder
 
 
-async def _category_id_for_name(client: Any, category_name: str) -> int | None:
+async def _category_id_for_name(
+    client: Any, category_name: str, cache: InventraCache | None = None
+) -> int | None:
     """Resolve a catalog category name to its id via the existing tool.
 
     Deterministic, bounded (one GET /api/categories through the existing tool
@@ -223,7 +227,7 @@ async def _category_id_for_name(client: Any, category_name: str) -> int | None:
     invents products).
     """
     try:
-        categories = await list_categories(client)
+        categories = await list_categories(client, cache=cache)
     except ToolError:
         return None
     wanted = category_name.strip().lower()
@@ -299,11 +303,15 @@ def _alias_terms_for(term: str | None) -> list[str]:
     return alias_terms
 
 
-async def _search_products_bounded(client: Any, message: str) -> ProductListResponse:
+async def _search_products_bounded(
+    client: Any, message: str, cache: InventraCache | None = None
+) -> ProductListResponse:
     """Product search with the bounded zero-result ladder (single implementation).
 
     Shared by the ``product_search`` intent and by name→product resolution for
-    ``product_details`` so the search/retry logic is never duplicated.
+    ``product_details`` so the search/retry logic is never duplicated. The
+    optional cache (milestone 4) rides the SAME ladder — every attempt is a
+    cache-aside read of its own exact parameters.
     """
     raw = message.strip()
     # Canonicalize alias tokens up front (laptops→laptop) so the ladder and
@@ -313,6 +321,7 @@ async def _search_products_bounded(client: Any, message: str) -> ProductListResp
     result = await search_products(
         client,
         ProductSearchParams(search=first, per_page=5),
+        cache=cache,
     )
     # Bounded zero-result ladder: raw message, then individual significant
     # tokens ( Inventra matches the whole phrase as one substring ). Never
@@ -324,6 +333,7 @@ async def _search_products_bounded(client: Any, message: str) -> ProductListResp
             result = await search_products(
                 client,
                 ProductSearchParams(search=fallback, per_page=5),
+                cache=cache,
             )
             if result.total > 0:
                 break
@@ -338,25 +348,29 @@ async def _search_products_bounded(client: Any, message: str) -> ProductListResp
                 continue  # already tried verbatim in the ladder above
             if alias.startswith("category:"):
                 category_id = await _category_id_for_name(
-                    client, alias.removeprefix("category:")
+                    client, alias.removeprefix("category:"), cache=cache
                 )
                 if category_id is None:
                     continue
                 result = await search_products(
                     client,
                     ProductSearchParams(category_id=category_id, per_page=5),
+                    cache=cache,
                 )
             else:
                 result = await search_products(
                     client,
                     ProductSearchParams(search=alias, per_page=5),
+                    cache=cache,
                 )
             if result.total > 0:
                 break
     return result
 
 
-async def _resolve_product_by_name(client: Any, message: str) -> Product | None:
+async def _resolve_product_by_name(
+    client: Any, message: str, cache: InventraCache | None = None
+) -> Product | None:
     """Resolve a product by name from a natural-language message.
 
     Deterministic (no LLM): runs the shared bounded search over the message,
@@ -364,7 +378,7 @@ async def _resolve_product_by_name(client: Any, message: str) -> Product | None:
     first hit. Returns ``None`` when nothing matches — the caller then emits
     the honest no-result failure instead of inventing a product.
     """
-    result = await _search_products_bounded(client, message)
+    result = await _search_products_bounded(client, message, cache=cache)
     if result.total == 0:
         return None
     term = _extract_search_term(message)
@@ -375,38 +389,42 @@ async def _resolve_product_by_name(client: Any, message: str) -> Product | None:
     return result.products[0]
 
 
-async def gather_context(state: AgentState, client: Any) -> dict[str, Any]:
+async def gather_context(
+    state: AgentState, client: Any, cache: InventraCache | None = None
+) -> dict[str, Any]:
     """Node: call the tool matching the classified intent.
 
     ``client`` is the injected ``InventraClient`` (typed loosely here only to
     avoid a module-scope import cycle; tests inject a mock at this seam).
+    ``cache`` is the optional milestone-4 read-through cache (``None`` keeps
+    the historical direct-read path — tests rely on that default).
     """
     intent = state.intent
     message = state.customer_message
 
     try:
         if intent == "product_search":
-            result = await _search_products_bounded(client, message)
+            result = await _search_products_bounded(client, message, cache=cache)
             return {"tool_results": {"products": result.model_dump(mode="json")}}
         if intent == "product_details":
             product_id = _extract_id(message)
             if product_id is not None:
                 # Numeric-ID flow (unchanged): direct details lookup.
-                product = await get_product_details(client, product_id)
+                product = await get_product_details(client, product_id, cache=cache)
                 return {"tool_results": {"product": product.model_dump(mode="json")}}
             # No numeric id → resolve the product by name with the existing
             # search capability (no LLM, no new endpoint), then reuse the
             # existing details flow with the resolved id.
-            resolved = await _resolve_product_by_name(client, message)
+            resolved = await _resolve_product_by_name(client, message, cache=cache)
             if resolved is None:
                 return _failure(
                     "gather_context",
                     ToolNotFoundError("No catalog product matches the requested name"),
                 )
-            product = await get_product_details(client, resolved.id)
+            product = await get_product_details(client, resolved.id, cache=cache)
             return {"tool_results": {"product": product.model_dump(mode="json")}}
         if intent == "category_browse":
-            categories = await list_categories(client)
+            categories = await list_categories(client, cache=cache)
             return {"tool_results": {"categories": [c.model_dump(mode="json") for c in categories]}}
         if intent == "inventory_check":
             raw = message.strip()
@@ -415,6 +433,7 @@ async def gather_context(state: AgentState, client: Any) -> dict[str, Any]:
             items = await check_inventory(
                 client,
                 InventorySearchParams(search=first),
+                cache=cache,
             )
             if not items and first is not None:
                 for fallback in _zero_result_fallback_terms(message, term):
@@ -423,6 +442,7 @@ async def gather_context(state: AgentState, client: Any) -> dict[str, Any]:
                     items = await check_inventory(
                         client,
                         InventorySearchParams(search=fallback),
+                        cache=cache,
                     )
                     if items:
                         break

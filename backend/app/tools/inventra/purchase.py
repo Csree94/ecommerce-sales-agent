@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.integrations.cache import InventraCache
 from app.integrations.inventra import InventraClient
 from app.integrations.inventra.errors import InventraError
 from app.integrations.inventra.schemas import StockOutResult
@@ -34,13 +35,25 @@ class StockOutParams(BaseModel):
     notes: str | None = Field(default=None, max_length=MAX_NOTES_LENGTH)
 
 
-async def stock_out_product(client: InventraClient, params: StockOutParams) -> StockOutResult:
-    """Deduct stock via ``POST /api/inventory/{product_id}/stock-out`` (once)."""
+async def stock_out_product(
+    client: InventraClient, params: StockOutParams, cache: InventraCache | None = None
+) -> StockOutResult:
+    """Deduct stock via ``POST /api/inventory/{product_id}/stock-out`` (once).
+
+    With a ``cache`` (milestone 4), a SUCCESSFUL deduction also invalidates
+    every cache entry that could carry the product's stock (product detail,
+    product list/search, inventory families) so no later read serves stale
+    stock. A failed deduction invalidates nothing — no upstream state changed.
+    The write itself is untouched: single explicit attempt, no retry.
+    """
     try:
-        return await client.stock_out(
+        result = await client.stock_out(
             params.product_id,
             quantity=params.quantity,
             notes=params.notes,
         )
     except InventraError as exc:
         translate_inventra_error(exc)  # always raises
+    if cache is not None:
+        await cache.invalidate_product_stock(params.product_id)
+    return result

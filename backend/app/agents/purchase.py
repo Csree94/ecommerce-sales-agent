@@ -48,6 +48,7 @@ from typing import Any
 from sqlalchemy import select
 
 from app.agents.state import AgentState, PendingPurchase
+from app.integrations.cache import InventraCache
 from app.models import Message, MessageRole
 from app.tools.errors import ToolError
 from app.tools.inventra import (
@@ -222,16 +223,21 @@ _NUMBER_WORDS = {
 }
 
 
-async def _resolve_product(client: Any, term: str) -> tuple[int | None, str | None, float | None]:
+async def _resolve_product(
+    client: Any, term: str, cache: InventraCache | None = None
+) -> tuple[int | None, str | None, float | None]:
     """Resolve the product term to (product_id, product_name, unit_price).
 
     Reuses the existing read-only product search tool (same call the
     ``product_search`` intent makes) — one bounded search, exact
     case-insensitive name preferred, first hit otherwise. Never invents a
     product; ``None`` ids mean the caller must not deduct. The price is
-    carried so the confirmation request can quote it (Step 3C).
+    carried so the confirmation request can quote it (Step 3C). The optional
+    cache (milestone 4) rides the same tool call.
     """
-    result = await search_products(client, ProductSearchParams(search=term, per_page=5))
+    result = await search_products(
+        client, ProductSearchParams(search=term, per_page=5), cache=cache
+    )
     if result.total == 0:
         return None, None, None
     wanted = term.strip().lower()
@@ -242,7 +248,9 @@ async def _resolve_product(client: Any, term: str) -> tuple[int | None, str | No
     return first.id, first.name, float(first.price)
 
 
-async def _available_stock(client: Any, product_id: int) -> int | None:
+async def _available_stock(
+    client: Any, product_id: int, cache: InventraCache | None = None
+) -> int | None:
     """Available quantity for a product, or ``None`` when it cannot be read.
 
     There is no per-product inventory endpoint upstream, so the stock check
@@ -251,7 +259,7 @@ async def _available_stock(client: Any, product_id: int) -> int | None:
     as "unknown, deduct anyway".
     """
     items = await check_inventory(
-        client, InventorySearchParams(search=str(product_id))
+        client, InventorySearchParams(search=str(product_id)), cache=cache
     )
     for item in items:
         if item.product_id == product_id:
@@ -370,13 +378,21 @@ def _pending_failure(
     }
 
 
-async def purchase(state: AgentState, client: Any, database: Any = None) -> dict[str, Any]:
+async def purchase(
+    state: AgentState,
+    client: Any,
+    database: Any = None,
+    cache: InventraCache | None = None,
+) -> dict[str, Any]:
     """Node: run the confirmation-gated purchase flow when — and only when —
     an order is explicitly requested and later explicitly confirmed.
 
     ``client`` is the injected ``InventraClient``; ``database`` the optional
     ``Database`` holder (pending-state persistence; same seam as the persist
-    node). Returns a state update; every non-purchase turn returns ``{}``.
+    node); ``cache`` the optional milestone-4 read-through cache (rides the
+    same tool calls; the write itself is untouched apart from its cache
+    invalidation hook). Returns a state update; every non-purchase turn
+    returns ``{}``.
     """
     message = state.customer_message
 
@@ -387,7 +403,7 @@ async def purchase(state: AgentState, client: Any, database: Any = None) -> dict
             return {}  # a bare "yes" without a pending purchase is a no-op
         # Re-check stock immediately before the write (it may have moved).
         try:
-            available = await _available_stock(client, pending.product_id)
+            available = await _available_stock(client, pending.product_id, cache=cache)
         except ToolError as exc:
             return _pending_failure(
                 database,
@@ -419,6 +435,7 @@ async def purchase(state: AgentState, client: Any, database: Any = None) -> dict
                     quantity=pending.quantity,
                     notes=f"Sales agent purchase ({pending.quantity} x {pending.product_name})",
                 ),
+                cache=cache,
             )
         except ToolError as exc:
             code = exc.code
@@ -500,7 +517,7 @@ async def purchase(state: AgentState, client: Any, database: Any = None) -> dict
         }
 
     try:
-        product_id, product_name, unit_price = await _resolve_product(client, term)
+        product_id, product_name, unit_price = await _resolve_product(client, term, cache=cache)
         if product_id is None or product_name is None:
             return {
                 "intent": "purchase",
@@ -514,7 +531,7 @@ async def purchase(state: AgentState, client: Any, database: Any = None) -> dict
                 ),
             }
 
-        available = await _available_stock(client, product_id)
+        available = await _available_stock(client, product_id, cache=cache)
         if available is None or available < quantity:
             # Insufficient stock must never ask for confirmation as though
             # the order were possible — no pending purchase is created.

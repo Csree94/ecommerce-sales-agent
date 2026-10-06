@@ -49,6 +49,9 @@ async def telegram_webhook(
     """Receive one Telegram update; fast-ack and process in the background."""
     database: Database = request.app.state.database
     client = request.app.state.inventra_client
+    # Milestone 4: read-through cache (getattr: absent in minimal test apps →
+    # direct reads, the historical behavior).
+    cache = getattr(request.app.state, "inventra_cache", None)
 
     try:
         payload = await request.json()
@@ -75,6 +78,7 @@ async def telegram_webhook(
                 client=client,
                 telegram=telegram,
                 database=database,
+                cache=cache,
             )
 
     task = asyncio.create_task(_process())

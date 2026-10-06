@@ -12,6 +12,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.integrations.cache import TTL_PRODUCTS, InventraCache, inventory_key
 from app.integrations.inventra import InventraClient, MovementType
 from app.integrations.inventra.errors import InventraError
 from app.integrations.inventra.schemas import InventoryItem, StockMovementListResponse
@@ -42,12 +43,36 @@ class InventoryMovementParams(BaseModel):
 
 
 async def check_inventory(
-    client: InventraClient, params: InventorySearchParams
+    client: InventraClient, params: InventorySearchParams, cache: InventraCache | None = None
 ) -> list[InventoryItem]:
     """Check stock levels via ``GET /api/inventory`` (verified filters only).
 
     For a single product, pass ``search`` (product name/SKU match upstream).
+    With a ``cache`` (milestone 4), results are served Redis-first with the
+    inventory TTL; empty results are negative-cached briefly. ``cache=None``
+    keeps the historical direct-read behavior byte-for-byte.
     """
+    if cache is not None:
+        key = inventory_key(
+            search=params.search,
+            stock_status=params.stock_status,
+            low_stock_only=params.low_stock_only,
+        )
+        try:
+            items = await cache.read_through(
+                key,
+                list[InventoryItem],
+                lambda: client.list_inventory(
+                    search=params.search,
+                    stock_status=params.stock_status,
+                    low_stock_only=params.low_stock_only,
+                ),
+                ttl_setting=TTL_PRODUCTS,
+                negative=True,
+            )
+        except InventraError as exc:
+            translate_inventra_error(exc)  # always raises (same contract as direct path)
+        return items if items is not None else []  # negative HIT → empty list
     try:
         return await client.list_inventory(
             search=params.search,
