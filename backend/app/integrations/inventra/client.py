@@ -1,6 +1,7 @@
-"""Read-only HTTP client for the Inventra API (httpx).
+"""HTTP client for the Inventra API (httpx).
 
-Implements ONLY the verified Inventra endpoints (read-only):
+Implements ONLY the verified Inventra endpoints — one read surface plus ONE
+single-attempt write:
 
 - ``GET /api/products``            (page, per_page, search, category_id, is_active, stock_status)
 - ``GET /api/products/{id}``
@@ -9,16 +10,19 @@ Implements ONLY the verified Inventra endpoints (read-only):
 - ``GET /api/inventory``           (search, stock_status, low_stock_only)
 - ``GET /api/inventory/movements`` (product_id, movement_type, page, per_page)
 
-Deliberately absent: any write operation, and any endpoint Inventra does not
-expose (no per-product inventory lookup, no SKU lookup). ``POST /api/ai/search``
-exists upstream but is intentionally NOT integrated in this phase.
+Deliberately absent: every write except ``stock_out`` (stock-in, adjust,
+threshold), and any endpoint Inventra does not expose (no per-product
+inventory lookup, no SKU lookup). ``POST /api/ai/search`` exists upstream but
+is intentionally NOT integrated in this phase.
 
 Design:
 - ``InventraClient → InventraAuthProvider → Authorization header``: the client
   never hard-codes credential logic; the provider is injectable and replaceable.
 - Explicit per-request timeout; bounded retries for transient failures only
   (connect/read timeouts, connection errors, 502/503/504). Never retries 4xx.
-  Every operation here is a read, so retrying is safe.
+  Every operation here is a read, so retrying is safe. The single write
+  (``stock_out``) is sent exactly once and never retried: a re-sent write
+  could double-deduct stock.
 - Failures map to typed integration errors; responses that do not match the
   verified contract raise ``InventraResponseError`` — failures are never
   silently converted into empty results.
@@ -54,6 +58,7 @@ from app.integrations.inventra.schemas import (
     Product,
     ProductListResponse,
     StockMovementListResponse,
+    StockOutResult,
     StockStatus,
 )
 
@@ -189,6 +194,63 @@ class InventraClient:
         path = "/api/inventory/movements"
         data = await self._request_json("GET", path, params=params)
         return self._parse(StockMovementListResponse, data, path)
+
+    # ------------------------------------------------------------------
+    # Write operations (exactly one, deliberately never retried)
+    # ------------------------------------------------------------------
+
+    async def stock_out(
+        self, product_id: int, *, quantity: int, notes: str | None = None
+    ) -> StockOutResult:
+        """``POST /api/inventory/{product_id}/stock-out`` — single attempt.
+
+        The ONE verified write in this integration (sales-agent purchases).
+        Deliberately bypasses ``_request_json`` and its bounded retry loop:
+        a timeout/connection failure after the server already committed the
+        deduction would otherwise trigger a second ``stock-out`` on retry —
+        a double deduction. A single explicit attempt makes "at most once"
+        semantics explicit; ambiguous outcomes surface as typed errors for
+        the caller to report honestly instead of being silently retried.
+
+        ``quantity`` is validated here (and in the tool layer) to be > 0 —
+        Inventra would reject anything else (HTTP 422).
+        """
+        if quantity <= 0:
+            raise InventraValidationError("stock-out quantity must be positive")
+        headers = self._auth.headers()
+        payload: dict[str, Any] = {"quantity": quantity}
+        if notes is not None:
+            payload["notes"] = notes
+        try:
+            response = await self._client.request(
+                "POST",
+                f"/api/inventory/{product_id}/stock-out",
+                json=payload,
+                headers=headers,
+            )
+        except httpx.TimeoutException as exc:
+            # Single attempt: no retry — the request may have been processed.
+            raise InventraTimeoutError(
+                f"Inventra stock-out timed out for product {product_id} "
+                "(state unknown — the operation was attempted exactly once)"
+            ) from exc
+        except httpx.TransportError as exc:
+            raise InventraConnectionError(
+                f"Could not reach Inventra for stock-out on product {product_id}"
+            ) from exc
+        self._raise_for_status(response, f"/api/inventory/{product_id}/stock-out")
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise InventraResponseError(
+                "Inventra returned a non-JSON body for the stock-out response"
+            ) from exc
+        result = self._parse(StockOutResult, data, f"/api/inventory/{product_id}/stock-out")
+        if result.product_id != product_id:
+            raise InventraResponseError(
+                "Inventra stock-out response does not match the requested product"
+            )
+        return result
 
     # ------------------------------------------------------------------
     # Dashboard (read-only stats endpoint, upstream-cached 120 s)

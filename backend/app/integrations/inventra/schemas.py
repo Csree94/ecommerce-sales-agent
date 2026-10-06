@@ -8,6 +8,8 @@ Inventra's route declarations, Pydantic schemas and service serializers):
 - ``GET /api/categories``    → bare JSON array of ``Category``
 - ``GET /api/inventory``     → bare JSON array of ``InventoryItem``
 - ``GET /api/inventory/movements`` → ``StockMovementListResponse`` envelope
+- ``POST /api/inventory/{id}/stock-out`` → ``StockOutResult`` (the ONLY write;
+  sent as a single explicit attempt — never retried, see client)
 
 These are data-transfer contracts only. Product/inventory truth stays in
 Inventra; nothing here is (or ever becomes) a Sales Agent database table.
@@ -87,6 +89,23 @@ class InventoryItem(BaseModel):
     low_stock_threshold: int
     is_low_stock: bool
     updated_at: datetime
+
+
+class StockOutResult(BaseModel):
+    """Payload of ``POST /api/inventory/{product_id}/stock-out``.
+
+    Mirrors the dict Inventra's ``inventory_service.stock_out`` returns:
+    the post-deduction inventory row for the product. ``quantity`` is the
+    REMAINING stock after the deduction — not the requested amount.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    product_id: int
+    product_name: str | None = None
+    quantity: int
+    low_stock_threshold: int | None = None
+    is_low_stock: bool | None = None
 
 
 class StockMovement(BaseModel):

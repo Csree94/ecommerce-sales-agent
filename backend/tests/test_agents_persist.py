@@ -17,6 +17,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 from app.agents import AgentState, ToolFailure
+from app.agents.state import PendingPurchase
 from app.models import AgentRun, AgentRunStatus, Conversation, Message, MessageRole
 
 
@@ -170,6 +171,112 @@ def test_conversation_id_from_state_is_used() -> None:
     persist(make_state(conversation_id=str(conversation.id)), database)
 
     session.get.assert_called_once_with(Conversation, conversation.id)
+
+
+# --- Purchase evidence (milestone 3B) ----------------------------------------
+
+
+def test_purchase_turn_persists_status_and_quantity_evidence() -> None:
+    """A completed purchase is recorded in the run's tool_calls evidence."""
+    database, session = make_database(make_conversation())
+    state = make_state(
+        intent="purchase",
+        tool_results={},
+        draft_response="Purchase complete: 2 x Samsung Galaxy S26. Remaining stock: 3.",
+        purchase_requested=True,
+        purchase_quantity=2,
+        purchase_status="completed",
+        purchase_message="Purchase complete: 2 x Samsung Galaxy S26. Remaining stock: 3.",
+    )
+
+    persist(state, database)
+
+    agent_run, _, agent_msg = session.add_all.call_args[0][0]
+    assert agent_run.tool_calls["purchase"] == {"status": "completed", "quantity": 2}
+    assert agent_msg.content_metadata["purchase_status"] == "completed"
+
+
+def test_failed_purchase_persists_failed_status_not_success() -> None:
+    """A failed write is recorded honestly — never as a completed purchase."""
+    database, session = make_database(make_conversation())
+    state = make_state(
+        intent="purchase",
+        tool_results={},
+        draft_response="Your purchase could not be completed at this time.",
+        purchase_requested=True,
+        purchase_quantity=1,
+        purchase_status="failed_unavailable",
+        purchase_message="Your purchase could not be completed at this time.",
+    )
+
+    persist(state, database)
+
+    agent_run, _, agent_msg = session.add_all.call_args[0][0]
+    assert agent_run.tool_calls["purchase"]["status"] == "failed_unavailable"
+    assert agent_msg.content_metadata["purchase_status"] == "failed_unavailable"
+
+
+def test_pending_confirmation_persists_marker_for_next_turn() -> None:
+    """An order request persists the pending purchase on the agent message."""
+    database, session = make_database(make_conversation())
+    state = make_state(
+        intent="purchase",
+        tool_results={},
+        draft_response=(
+            "Samsung Galaxy S26 is available for 1099.00. "
+            "Would you like me to confirm the order for 1 unit(s)?"
+        ),
+        purchase_requested=True,
+        purchase_quantity=1,
+        purchase_status="pending_confirmation",
+        pending_purchase=PendingPurchase(
+            product_id=12,
+            product_name="Samsung Galaxy S26",
+            quantity=1,
+            unit_price=1099.0,
+        ),
+    )
+
+    persist(state, database)
+
+    agent_run, _, agent_msg = session.add_all.call_args[0][0]
+    assert agent_run.tool_calls["purchase"]["status"] == "pending_confirmation"
+    assert agent_msg.content_metadata["pending_purchase"] == {
+        "product_id": 12,
+        "product_name": "Samsung Galaxy S26",
+        "quantity": 1,
+        "unit_price": 1099.0,
+    }
+
+
+def test_cancelled_purchase_leaves_no_pending_marker() -> None:
+    """A decline clears the pending purchase — no marker survives in evidence."""
+    database, session = make_database(make_conversation())
+    state = make_state(
+        intent="purchase",
+        tool_results={},
+        draft_response="Understood — the order was cancelled and nothing was purchased.",
+        purchase_requested=True,
+        purchase_status="cancelled_by_customer",
+        pending_purchase=None,
+    )
+
+    persist(state, database)
+
+    agent_run, _, agent_msg = session.add_all.call_args[0][0]
+    assert agent_run.tool_calls["purchase"]["status"] == "cancelled_by_customer"
+    assert "pending_purchase" not in agent_msg.content_metadata
+
+
+def test_non_purchase_turn_persists_no_purchase_keys() -> None:
+    """Ordinary turns keep the exact previous persistence shape."""
+    database, session = make_database(make_conversation())
+
+    persist(make_state(), database)
+
+    agent_run, _, agent_msg = session.add_all.call_args[0][0]
+    assert "purchase" not in agent_run.tool_calls
+    assert "purchase_status" not in agent_msg.content_metadata
 
 
 # --- Tool-failure turn (graph still replies and persists) -------------------

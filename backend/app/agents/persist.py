@@ -107,6 +107,18 @@ def persist_turn(state: AgentState, database: Database | None) -> dict[str, Any]
                 "intent": state.intent,
                 "tool_result_keys": sorted(state.tool_results),
                 "tool_errors": tool_errors,
+                # Purchase evidence (milestone 3B): recorded only when the
+                # purchase node ran; other turns keep the previous shape.
+                **(
+                    {
+                        "purchase": {
+                            "status": state.purchase_status,
+                            "quantity": state.purchase_quantity,
+                        }
+                    }
+                    if state.purchase_requested
+                    else {}
+                ),
             },
             token_usage=state.token_usage,
             error=None,
@@ -127,6 +139,18 @@ def persist_turn(state: AgentState, database: Database | None) -> dict[str, Any]
             telegram_message_id=telegram_message_id,
             external_created_at=external_created_at,
         )
+        # Pending-purchase marker (Step 3C confirmation flow): the purchase
+        # node sets state.pending_purchase on an order request; persisting it
+        # on the agent message's JSONB metadata makes the pending purchase
+        # retrievable by the NEXT turn's confirm/decline branch — no schema
+        # change. Consumed purchases are cleared by the node itself, so the
+        # marker is written only while a purchase is genuinely awaiting
+        # confirmation; a cancelled purchase leaves no marker behind.
+        pending_evidence = (
+            {"pending_purchase": state.pending_purchase.model_dump(mode="json")}
+            if state.pending_purchase is not None
+            else {}
+        )
         agent_message = Message(
             conversation_id=conversation_id,
             role=MessageRole.AGENT,
@@ -135,6 +159,15 @@ def persist_turn(state: AgentState, database: Database | None) -> dict[str, Any]
             content_metadata={
                 "intent": state.intent,
                 "tool_error_codes": sorted({code for code in _error_codes(state)}),
+                # Purchase evidence (milestone 3B): the machine-readable outcome
+                # of the gated stock-out flow. Only present when the purchase
+                # node actually ran — absent for every other turn.
+                **(
+                    {"purchase_status": state.purchase_status}
+                    if state.purchase_requested
+                    else {}
+                ),
+                **pending_evidence,
             },
         )
 

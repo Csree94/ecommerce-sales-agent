@@ -169,7 +169,11 @@ def unconfigured_env(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://user:pass@localhost:5432/testdb")
     monkeypatch.setenv("APP_ENV", "local")
-    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    # Hermetic: explicit EMPTY values (env vars beat env_file values) — delenv
+    # alone lets a real local .env leak TELEGRAM_BOT_TOKEN back in, constructing
+    # a client and turning the expected 503 into a 200 with a background turn.
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "")
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "")
     monkeypatch.setenv("GEMINI_API_KEY", "")
     monkeypatch.setenv("FALLBACK_LLM_API_KEY", "")
     get_settings.cache_clear()

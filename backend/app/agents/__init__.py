@@ -20,11 +20,18 @@ from app.agents.compose import compose_reply
 from app.agents.gather import gather_context
 from app.agents.graph import build_graph, run_turn
 from app.agents.persist import persist_turn
-from app.agents.state import AgentState, IntentName, ToolErrorCode, ToolFailure
+from app.agents.state import (
+    AgentState,
+    IntentName,
+    PurchaseStatus,
+    ToolErrorCode,
+    ToolFailure,
+)
 
 __all__ = [
     "AgentState",
     "IntentName",
+    "PurchaseStatus",
     "ToolErrorCode",
     "ToolFailure",
     "build_graph",

@@ -1,8 +1,13 @@
 """LangGraph definition for the sales agent.
 
-Topology (audit §K):
+Topology (audit §K, extended by milestone 3B):
 
-    START → classify_intent → gather_context → compose_reply → persist → END
+    START → classify_intent → gather_context → purchase → compose_reply → persist → END
+
+- ``purchase`` is conditionally gated: it returns ``{}`` for every
+  non-purchase turn (no tool calls, no state change) and runs the
+  single-attempt Inventra stock-out flow only for explicit purchase
+  requests (see ``app.agents.purchase``).
 
 - The graph contains ONLY orchestration: no HTTP, no URLs, no auth, no engine
   creation. Dependencies (InventraClient, Database) are injected via closures.
@@ -31,6 +36,7 @@ from app.agents.classify import classify_intent
 from app.agents.compose import compose_reply
 from app.agents.gather import gather_context
 from app.agents.persist import persist_turn
+from app.agents.purchase import purchase
 from app.agents.state import AgentState
 from app.integrations.llm import LLMGateway
 
@@ -58,6 +64,9 @@ def build_graph(
     async def gather(state: AgentState) -> dict[str, Any]:
         return await gather_context(state, client)
 
+    async def purchase_node(state: AgentState) -> dict[str, Any]:
+        return await purchase(state, client, database)
+
     async def compose(state: AgentState) -> dict[str, Any]:
         return await compose_reply(state, gateway)
 
@@ -69,12 +78,14 @@ def build_graph(
     graph = StateGraph(AgentState)
     graph.add_node("classify_intent", classify_intent)
     graph.add_node("gather_context", gather)
+    graph.add_node("purchase", purchase_node)
     graph.add_node("compose_reply", compose)
     graph.add_node("persist", persist)
 
     graph.add_edge(START, "classify_intent")
     graph.add_edge("classify_intent", "gather_context")
-    graph.add_edge("gather_context", "compose_reply")
+    graph.add_edge("gather_context", "purchase")
+    graph.add_edge("purchase", "compose_reply")
     graph.add_edge("compose_reply", "persist")
     graph.add_edge("persist", END)
 

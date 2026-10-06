@@ -298,8 +298,12 @@ def test_tool_errors_do_not_leak_credentials(client: InventraClient) -> None:
 # --- Scope guardrails (strictly read-only, no DB, no HTTP in tools) --------
 
 
-def test_tool_surface_is_exactly_the_six_read_operations() -> None:
-    """No write tools, no extra operations — six read functions only."""
+def test_tool_surface_is_the_six_read_operations_plus_the_purchase_write() -> None:
+    """The six read functions plus the single purchase write (milestone 3B).
+
+    ``stock_out_product`` is the ONLY write tool — one verified Inventra
+    endpoint, added deliberately (sales-agent purchase deduction).
+    """
     import app.tools.inventra as pkg
 
     public_callables = {
@@ -314,11 +318,17 @@ def test_tool_surface_is_exactly_the_six_read_operations() -> None:
         "get_category_details",
         "check_inventory",
         "get_inventory_movements",
+        "stock_out_product",
     }
 
 
-def test_no_write_functionality_on_tools() -> None:
-    """No create/update/delete/stock-change operations may exist anywhere."""
+def test_no_write_functionality_beyond_the_single_purchase_tool() -> None:
+    """No create/update/delete/stock-change operations may exist anywhere.
+
+    ``stock_out_product`` is the deliberate single exception (purchase flow,
+    milestone 3B); every other write — including admin stock-in/adjust —
+    must stay absent.
+    """
     import app.tools.inventra as pkg
 
     forbidden_fragments = (
@@ -327,7 +337,6 @@ def test_no_write_functionality_on_tools() -> None:
         "delete_product",
         "deactivate_product",
         "stock_in",
-        "stock_out",
         "adjust_stock",
         "update_threshold",
     )

@@ -56,6 +56,7 @@ _INTENT_LABELS = {
     "category_browse": "category listing",
     "inventory_check": "stock check",
     "inventory_movements": "stock movements",
+    "purchase": "purchase request",
     "unknown": "request",
 }
 
@@ -90,6 +91,14 @@ def _deterministic_reply(state: AgentState) -> str:
     """Previous-phase template composition (used only when all LLMs fail)."""
     label = _INTENT_LABELS.get(state.intent, "request")
     parts: list[str] = []
+
+    # Purchase flow outcomes take priority: the customer must get an honest,
+    # self-contained confirmation or failure — never a generic template.
+    if state.purchase_requested and state.purchase_message:
+        parts.append(state.purchase_message)
+        if state.purchase_status.startswith("failed_") and state.tool_errors:
+            parts.append("(The catalog could not be reached to complete it.)")
+        return " ".join(parts)
 
     if state.tool_errors:
         first = next(iter(state.tool_errors.values()))
@@ -146,6 +155,16 @@ def build_prompt(state: AgentState) -> str:
 
     intent_label = _INTENT_LABELS.get(state.intent, state.intent)
     sections.append(f"Classified intent: {intent_label}")
+
+    # Purchase outcome guidance: the composer must reflect the ACTUAL result
+    # (deduction done, rejected, or failed) — never invent a confirmation.
+    if state.purchase_requested:
+        lines = [f"Purchase status: {state.purchase_status}"]
+        if state.purchase_quantity is not None:
+            lines.append(f"Requested quantity: {state.purchase_quantity}")
+        if state.purchase_message:
+            lines.append(f"Outcome: {state.purchase_message}")
+        sections.append("\n".join(lines))
 
     if state.tool_results:
         results = {

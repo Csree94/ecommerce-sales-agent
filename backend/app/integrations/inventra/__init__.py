@@ -1,9 +1,11 @@
-"""Inventra integration (read-only HTTP client).
+"""Inventra integration (HTTP client).
 
-Scope (verified Inventra API, September 2026): typed read-only access to
-products, categories and inventory. No write operations exist here — the
-Sales Agent never mutates Inventra data. Product/inventory truth stays in
-Inventra; this package talks HTTP only (never Inventra's database).
+Scope (verified Inventra API, September 2026): typed access to products,
+categories and inventory — reads plus exactly ONE write, the sales-agent
+purchase deduction (``POST /api/inventory/{id}/stock-out``), which is sent as
+a single explicit attempt and never retried. No other write exists here:
+stock-in/adjust/threshold stay admin-only, and product/inventory truth stays
+in Inventra; this package talks HTTP only (never Inventra's database).
 
 Structure:
 - ``client``   — ``InventraClient`` (httpx; the only outbound path)
@@ -40,6 +42,7 @@ from app.integrations.inventra.schemas import (
     ProductListResponse,
     StockMovement,
     StockMovementListResponse,
+    StockOutResult,
     StockStatus,
 )
 
@@ -66,6 +69,7 @@ __all__ = [
     "StaticBearerTokenProvider",
     "StockMovement",
     "StockMovementListResponse",
+    "StockOutResult",
     "StockStatus",
     "build_auth_provider",
     "get_inventra_settings",

@@ -168,6 +168,7 @@ def test_state_rejects_invalid_intent() -> None:
     [
         ("I'm looking for hiking shoes", "product_search"),
         ("tell me about product 7", "product_details"),
+        ("What is the price of Samsung Galaxy S26?", "product_details"),
         ("what categories do you have", "category_browse"),
         ("is the trail shoes in stock", "inventory_check"),
         ("show me the stock history for product 7", "inventory_movements"),
@@ -178,6 +179,25 @@ def test_state_rejects_invalid_intent() -> None:
 def test_classification_produces_expected_intents(message: str, expected_intent: str) -> None:
     result = classify_intent(AgentState(customer_message=message))
     assert result == {"intent": expected_intent}
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_intent"),
+    [
+        ("how much is the Samsung Galaxy S26?", "product_details"),
+        ("what does the TS-001 cost?", "product_details"),
+        ("¿Cuánto cuesta la TS-001?", "product_details"),
+        ("how much stock is available?", "inventory_check"),
+    ],
+)
+def test_classification_recognizes_price_questions(
+    message: str, expected_intent: str
+) -> None:
+    """Price/cost questions retrieve product details (regression: were unknown).
+
+    'how much stock' must STAY inventory_check — earlier rules keep priority.
+    """
+    assert classify_intent(AgentState(customer_message=message)) == {"intent": expected_intent}
 
 
 def test_classification_is_deterministic() -> None:

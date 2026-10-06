@@ -1,9 +1,9 @@
-"""Inventra agent tools (strictly read-only).
+"""Inventra agent tools.
 
-Thin typed wrappers over ``app.integrations.inventra.InventraClient`` for a
-future LangGraph graph:
+Thin typed wrappers over ``app.integrations.inventra.InventraClient`` used by
+the LangGraph graph:
 
-    LangGraph (future) → agent tools (this package) → InventraClient → HTTP
+    LangGraph → agent tools (this package) → InventraClient → HTTP
 
 Rules enforced here (architecture audit §E):
 - no HTTP code, no URLs, no auth details, no database access, no LLM calls,
@@ -12,8 +12,10 @@ Rules enforced here (architecture audit §E):
   *input* models only;
 - client failures are translated into the stable tool error hierarchy
   (``app.tools.errors``) and never silently become empty results;
-- the surface is strictly read-only — no create/update/delete/stock-change
-  tools exist by design.
+- the surface is read-only plus exactly ONE write: ``stock_out_product`` (the
+  purchase deduction, single attempt by client contract). Stock-in/adjust/
+  threshold remain deliberately absent — they are admin operations, not
+  customer actions.
 """
 
 from app.integrations.inventra import InventraClient
@@ -31,6 +33,7 @@ from app.tools.inventra.products import (
     get_product_details,
     search_products,
 )
+from app.tools.inventra.purchase import StockOutParams, stock_out_product
 
 __all__ = [
     "MAX_PER_PAGE",
@@ -38,6 +41,7 @@ __all__ = [
     "InventorySearchParams",
     "InventraClient",
     "ProductSearchParams",
+    "StockOutParams",
     "ToolError",
     "ToolInputError",
     "ToolNotFoundError",
@@ -48,4 +52,5 @@ __all__ = [
     "get_product_details",
     "list_categories",
     "search_products",
+    "stock_out_product",
 ]

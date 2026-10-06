@@ -15,7 +15,12 @@ from app.agents.state import AgentState, IntentName
 _INTENT_RULES: list[tuple[IntentName, tuple[str, ...]]] = [
     ("inventory_movements", ("movement", "movement history", "stock history", "stock movement")),
     ("inventory_check", ("in stock", "in-stock", "stock", "availability", "available")),
-    ("product_details", ("details", "detail", "more about", "tell me about", "info about")),
+    ("product_details", ("details", "detail", "more about", "tell me about", "info about",
+                          # Price/cost questions: the price lives on the product, so they
+                          # retrieve product details (Step 3C: previously fell to "unknown"
+                          # and the agent answered without catalog data). Spanish price
+                          # words ride the same rule — T9 fallback table stays untouched.
+                          "price", "how much", "cost", "cuánto", "cuesta")),
     ("category_browse", ("categories", "category", "browse", "catalog sections")),
     (
         "product_search",

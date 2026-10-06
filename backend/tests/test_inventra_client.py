@@ -391,8 +391,8 @@ def test_missing_base_url_raises_config_error() -> None:
 # --- Scope guardrails -------------------------------------------------------
 
 
-def test_client_exposes_only_verified_read_methods() -> None:
-    """No write methods, no guessed endpoints — read-only surface only.
+def test_client_exposes_only_verified_endpoints() -> None:
+    """No guessed endpoints — verified reads plus the single purchase write.
 
     ``aclose`` is the lifecycle method, not an API endpoint.
     """
@@ -410,6 +410,7 @@ def test_client_exposes_only_verified_read_methods() -> None:
         "list_inventory",
         "list_inventory_movements",
         "get_dashboard_stats",
+        "stock_out",
     }
 
 
@@ -443,6 +444,157 @@ def test_no_product_or_inventory_tables_in_sales_agent_db() -> None:
 
     forbidden = {"products", "inventory"}
     assert not (forbidden & set(Base.metadata.tables))
+
+
+# --- Single write: stock-out (milestone 3B) ----------------------------------
+
+
+def test_stock_out_request_path_payload_and_parsing() -> None:
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["method"] = request.method
+        seen["path"] = request.url.path
+        seen["json"] = request.read().decode()
+        seen["auth"] = request.headers.get("Authorization")
+        return httpx.Response(
+            200,
+            json={
+                "product_id": 7,
+                "product_name": "Trail Shoes",
+                "quantity": 3,
+                "low_stock_threshold": 10,
+                "is_low_stock": True,
+            },
+        )
+
+    with inventra_client(make_settings(), handler) as client:
+        result = asyncio.run(
+            client.stock_out(7, quantity=1, notes="Sales agent purchase (1 x Trail Shoes)")
+        )
+
+    assert seen["method"] == "POST"
+    assert seen["path"] == "/api/inventory/7/stock-out"
+    assert "\"quantity\":1" in seen["json"].replace(" ", "") or "\"quantity\": 1" in seen["json"]
+    assert seen["auth"] == f"Bearer {TEST_TOKEN}"
+    assert result.quantity == 3  # remaining stock, not the requested amount
+    assert result.product_id == 7
+
+
+def test_stock_out_notes_omitted_when_none() -> None:
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["json"] = request.read().decode()
+        return httpx.Response(200, json={"product_id": 7, "quantity": 3})
+
+    with inventra_client(make_settings(), handler) as client:
+        asyncio.run(client.stock_out(7, quantity=1))
+
+    assert "notes" not in seen["json"]
+
+
+def test_stock_out_rejects_non_positive_quantity_locally() -> None:
+    """Zero/negative quantities never reach the network."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("no request should be sent for an invalid quantity")
+
+    with inventra_client(make_settings(), handler) as client:
+        with pytest.raises(InventraValidationError):
+            asyncio.run(client.stock_out(7, quantity=0))
+        with pytest.raises(InventraValidationError):
+            asyncio.run(client.stock_out(7, quantity=-2))
+
+
+def test_stock_out_400_insufficient_stock_is_not_retried() -> None:
+    """A 400 (e.g. upstream insufficient stock) is a typed error, never retried."""
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(400, json={"detail": "Insufficient stock. Available: 2"})
+
+    with inventra_client(make_settings(), handler) as client:
+        with pytest.raises(InventraValidationError):
+            asyncio.run(client.stock_out(7, quantity=5))
+
+    assert calls == 1
+
+
+def test_stock_out_5xx_is_never_retried() -> None:
+    """Writes have at-most-once semantics: no retry, even on 502/503/504."""
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(503, json={"detail": "unavailable"})
+
+    with inventra_client(make_settings(INVENTRA_MAX_RETRIES=2), handler) as client:
+        with pytest.raises(InventraServerError):
+            asyncio.run(client.stock_out(7, quantity=1))
+
+    assert calls == 1
+
+
+def test_stock_out_timeout_is_never_retried() -> None:
+    """A timed-out write may have been processed server-side → no retry."""
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        raise httpx.ReadTimeout("timed out", request=request)
+
+    with inventra_client(make_settings(INVENTRA_MAX_RETRIES=2), handler) as client:
+        with pytest.raises(InventraTimeoutError):
+            asyncio.run(client.stock_out(7, quantity=1))
+
+    assert calls == 1
+
+
+def test_stock_out_connection_error_is_never_retried() -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        raise httpx.ConnectError("refused", request=request)
+
+    with inventra_client(make_settings(INVENTRA_MAX_RETRIES=2), handler) as client:
+        with pytest.raises(InventraConnectionError):
+            asyncio.run(client.stock_out(7, quantity=1))
+
+    assert calls == 1
+
+
+def test_stock_out_mismatched_product_id_raises_response_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"product_id": 99, "quantity": 3})
+
+    with inventra_client(make_settings(), handler) as client:
+        with pytest.raises(InventraResponseError):
+            asyncio.run(client.stock_out(7, quantity=1))
+
+
+def test_read_methods_still_retry_on_5xx() -> None:
+    """Regression: the write's no-retry rule must not touch the read path."""
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return httpx.Response(503, json={"detail": "unavailable"})
+        return httpx.Response(200, json=PRODUCT_LIST)
+
+    with inventra_client(make_settings(INVENTRA_MAX_RETRIES=2), handler) as client:
+        result = asyncio.run(client.list_products())
+
+    assert calls == 2
+    assert result.total == 1
 
 
 def test_inventra_schemas_are_pydantic_not_orm() -> None:
