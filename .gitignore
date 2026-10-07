@@ -1,4 +1,7 @@
 # ---------- Python / FastAPI ----------
+# DNS fallback cache (runtime IP cache beside the backend .env)
+backend/.dns_cache.json
+
 __pycache__/
 *.py[cod]
 *$py.class

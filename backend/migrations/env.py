@@ -54,7 +54,16 @@ def run_migrations_online() -> None:
     """Run migrations with a live connection."""
     from sqlalchemy import create_engine
 
-    connectable = create_engine(_get_url(), poolclass=pool.NullPool)
+    from app.db.dns_fallback import build_conninfo_kwargs
+
+    connect_args: dict = {}
+    try:
+        connect_args.update(build_conninfo_kwargs(_get_url()) or {})
+    except OSError:
+        pass  # unresolvable everywhere — let alembic surface the real error
+    connectable = create_engine(
+        _get_url(), poolclass=pool.NullPool, connect_args=connect_args
+    )
     with connectable.connect() as connection:
         context.configure(
             connection=connection,

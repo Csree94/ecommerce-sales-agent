@@ -8,6 +8,7 @@ here — schema/migrations arrive in a later phase (Alembic).
 
 from typing import Any
 
+from psycopg import connect as psycopg_connect
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.orm import Session, sessionmaker
@@ -15,10 +16,35 @@ from sqlalchemy.pool import NullPool
 
 from app.config.settings import Settings, get_settings
 from app.core.logging import get_logger
+from app.db.dns_fallback import extract_db_host, get_shared_resolver
 
 logger = get_logger(__name__)
 
 _SUPPORTED_BACKENDS = {"postgresql", "postgres"}
+
+
+def _dns_resilient_creator(url: str, connect_timeout: int) -> "Any":
+    """Build a zero-arg SQLAlchemy ``creator`` with live DNS fallback.
+
+    Called by the pool on every new connection (0-arg signature), so each
+    attempt re-resolves: system first, cached last-known-good IP next, DoH as
+    the final fallback. The resolved IP goes into psycopg's ``hostaddr`` while
+    the original hostname stays in ``host`` for TLS/SNI certificate checks.
+    """
+
+    def _connect() -> Any:
+        host = extract_db_host(url)
+        if not host:
+            return psycopg_connect(url, connect_timeout=connect_timeout)
+        try:
+            ip = get_shared_resolver().resolve(host)
+        except OSError as exc:
+            raise RuntimeError(f"cannot reach database host {host!r}: {exc}") from exc
+        # hostaddr carries the resolved IP; `host` remains the hostname so
+        # TLS/SNI certificate verification still checks the real domain.
+        return psycopg_connect(url, hostaddr=ip, connect_timeout=connect_timeout)
+
+    return _connect
 
 
 def _engine_kwargs() -> dict[str, Any]:
@@ -52,7 +78,17 @@ def create_db_engine(settings: Settings | None = None) -> Engine:
             f"(expected one of {sorted(_SUPPORTED_BACKENDS)})"
         )
         raise ValueError(msg)
-    engine = create_engine(settings.sqlalchemy_database_uri, **_engine_kwargs())
+    engine_kwargs = _engine_kwargs()
+    if url.drivername in {"postgresql", "postgresql+psycopg"}:
+        # DNS fallback: resolve per connection (system → cache → DoH) and hand
+        # psycopg a direct IP while keeping the hostname for TLS/SNI
+        # verification (no security loss). Survives startup-time outages and
+        # cloud IP rotation because resolution is retried live on each connect.
+        engine_kwargs["creator"] = _dns_resilient_creator(
+            settings.sqlalchemy_database_uri, connect_timeout=settings.db_connect_timeout_seconds
+        )
+        engine_kwargs.pop("connect_args", None)
+    engine = create_engine(settings.sqlalchemy_database_uri, **engine_kwargs)
     logger.info(
         "database_engine_created",
         backend=url.get_backend_name(),
