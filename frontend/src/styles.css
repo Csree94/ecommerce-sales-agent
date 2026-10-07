@@ -52,6 +52,25 @@ button {
   font: inherit;
 }
 
+/* Password show/hide (login only) — input keeps the styles above. */
+.password-field {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.password-field input {
+  flex: 1;
+}
+
+.eye-toggle {
+  border: 1px solid #c9d2dd;
+  background: #fff;
+  border-radius: 6px;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.8rem;
+  color: #5b6675;
+}
+
 .error {
   color: #b3261e;
   font-size: 0.85rem;
